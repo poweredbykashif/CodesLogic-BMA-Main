@@ -1,0 +1,528 @@
+import React, { useState, useEffect } from 'react';
+import Dashboard from './sections/Dashboard';
+import Projects, { ProjectsHandle } from './sections/Projects';
+import Finances from './sections/Finances';
+import Accounts from './sections/Accounts';
+import Assets from './sections/Assets';
+import Chats from './sections/Chats';
+import Users, { UsersHandle } from './sections/Users';
+import Channels from './sections/Channels';
+import Integrations from './sections/Integrations';
+import Settings, { SettingsHandle } from './sections/Settings';
+import { Modal } from './components/Surfaces';
+import Button from './components/Button';
+import { IconSettings } from './components/Icons';
+import Earnings from './sections/Earnings';
+import ProjectDetails from './sections/ProjectDetails';
+import UserDetails from './sections/UserDetails';
+import SelectRole from './sections/SelectRole';
+import CompleteProfile from './sections/CompleteProfile';
+import PendingApproval from './sections/PendingApproval';
+import Reminders from './sections/Reminders';
+import Analytics from './sections/Analytics';
+import Tasks from './sections/Tasks';
+import Forms from './sections/Forms';
+
+import { DashboardLayout, DashboardView } from './layouts/DashboardLayout';
+import { SignInScreen, SignUpScreen } from './sections/AuthScreens';
+import ThanksScreen from './sections/ThanksScreen';
+import { supabase } from './lib/supabase';
+import { Session } from '@supabase/supabase-js';
+import { ToastContainer } from './components/Toast';
+import { getInitialView, updateRoute, PATH_MAP } from './utils/routing';
+import { NotificationProvider } from './contexts/NotificationContext';
+import { UserProvider } from './contexts/UserContext';
+import { AccountProvider } from './contexts/AccountContext';
+import { ReminderOverlay } from './components/ReminderOverlay';
+
+
+type View = 'dashboard' | 'signin' | 'signup' | 'select-role' | 'complete-profile' | 'pending-approval' | 'deactivated' | 'welcome';
+
+const App: React.FC = () => {
+  const initial = getInitialView();
+  const [view, setView] = useState<View>('signin');
+  const [dashboardView, setDashboardView] = useState<DashboardView>(initial.view);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(initial.projectId);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(initial.userId);
+  const [selectedRole, setSelectedRole] = useState<string | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
+  const [initialStatus, setInitialStatus] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [isSettingsDirty, setIsSettingsDirty] = useState(false);
+  const [pendingView, setPendingView] = useState<DashboardView | null>(null);
+  const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
+  const settingsRef = React.useRef<SettingsHandle>(null);
+  const projectsRef = React.useRef<ProjectsHandle>(null);
+  const usersRef = React.useRef<UsersHandle>(null);
+
+  const determineView = (profile: any, currentSession?: Session | null): View => {
+    let role = profile?.role?.toLowerCase().trim() || '';
+    const status = profile?.status?.trim() || '';
+    const hasSeenWelcome = profile?.has_seen_welcome;
+
+    if (!role && currentSession?.user?.user_metadata?.role) {
+      role = currentSession.user.user_metadata.role.toLowerCase().trim();
+    }
+
+    // Check status-based routing
+    if (status.toLowerCase() === 'invited') return 'complete-profile';
+
+    // Admin always goes to dashboard once active
+    if (role === 'admin' || role === 'super admin') return 'dashboard';
+    if (status.toLowerCase() === 'pending') return 'pending-approval';
+    if (status.toLowerCase() === 'disabled' || status.toLowerCase() === 'deactivated') return 'deactivated';
+
+    // If user has active status, show dashboard or welcome
+    if (status.toLowerCase() === 'active') {
+      return hasSeenWelcome ? 'dashboard' : 'welcome';
+    }
+
+    // If user has a role (even without explicit active status), they should go to dashboard
+    // This handles cases where profile exists with a role but status might be missing/undefined
+    if (role) {
+      return hasSeenWelcome ? 'dashboard' : 'welcome';
+    }
+
+    // Only send to select-role if no profile/role exists
+    return 'select-role';
+  };
+
+  useEffect(() => {
+    // Get initial session
+    const initAuth = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        setSession(session);
+
+        if (session) {
+          const { data: profile, error: profileError } = await supabase
+            .from('profiles')
+            .select('status, role, has_seen_welcome')
+            .eq('id', session.user.id)
+            .single();
+
+          if (profile) {
+            if (profile.role) setSelectedRole(profile.role);
+            setInitialStatus(profile.status);
+            const targetView = determineView(profile, session);
+            setView(targetView);
+          } else {
+            // Metadata check for invited users
+            const metaRole = session.user.user_metadata?.role;
+            if (metaRole) {
+              setSelectedRole(metaRole);
+              setInitialStatus('Invited');
+              setView('complete-profile');
+            } else {
+              const savedStep = localStorage.getItem('nova_onboarding_step') as View | null;
+              if (savedStep && (savedStep === 'select-role' || savedStep === 'complete-profile')) {
+                setView(savedStep);
+                const savedRole = localStorage.getItem('nova_selected_role');
+                if (savedRole) setSelectedRole(savedRole);
+              } else {
+                setView('select-role');
+              }
+            }
+          }
+        } else {
+          setView('signin');
+        }
+      } catch (err) {
+        console.error('Error during initAuth:', err);
+        setView('signin');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    initAuth();
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      console.log('🔄 Auth state changed:', _event, session?.user?.id);
+      setSession(session);
+
+      if (session) {
+        supabase
+          .from('profiles')
+          .select('status, role, has_seen_welcome')
+          .eq('id', session.user.id)
+          .single()
+          .then(({ data: profile, error: profileError }) => {
+            console.log('👤 Profile on auth change:', profile);
+            console.log('❌ Profile error on auth change:', profileError);
+
+            if (profile) {
+              if (profile.role) setSelectedRole(profile.role);
+              setInitialStatus(profile.status);
+              const targetView = determineView(profile, session);
+              console.log('🎯 Auth change - determined view:', targetView);
+              setView(targetView);
+            } else if (session.user.user_metadata?.role) {
+              setSelectedRole(session.user.user_metadata.role);
+              setInitialStatus('Invited');
+              setView('complete-profile');
+            }
+          });
+      } else {
+        setView('signin');
+        localStorage.removeItem('lastDashboardView');
+      }
+    });
+
+    const handlePopState = () => {
+      const { view, projectId, userId } = getInitialView();
+      setDashboardView(view);
+      setSelectedProjectId(projectId);
+      setSelectedUserId(userId);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+
+    return () => {
+      subscription.unsubscribe();
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (view === 'dashboard') {
+      const segments = window.location.pathname.substring(1).split('/');
+      const firstSegment = segments[0]?.toLowerCase();
+      const targetPath = PATH_MAP[dashboardView];
+
+      if (firstSegment !== targetPath || selectedProjectId || selectedUserId) {
+        updateRoute(dashboardView, undefined, selectedProjectId, selectedUserId);
+      }
+    }
+  }, [view, dashboardView, selectedProjectId, selectedUserId]);
+
+  const handleSignOut = async () => {
+    // Clear all simulation and temporary state to prevent crosstalk
+    const keysToRemove = [
+      'nova_simulated_role',
+      'nova_preview_permissions',
+      'temp_selected_role',
+      'temp_preview_permissions',
+      'nova_onboarding_step',
+      'nova_selected_role'
+    ];
+    keysToRemove.forEach(key => localStorage.removeItem(key));
+
+    await supabase.auth.signOut();
+    setView('signin');
+
+    // Force a reload to ensure all React contexts are completely reset
+    window.location.replace('/');
+  };
+
+  const handleItemSelect = (item: DashboardView) => {
+    if (isSettingsDirty && dashboardView === 'Settings') {
+      setPendingView(item);
+      setPendingProjectId(null);
+      return;
+    }
+    setDashboardView(item);
+    setSelectedProjectId(null);
+    setSelectedUserId(null);
+  };
+
+  const handleProjectOpen = (projectId: string) => {
+    if (isSettingsDirty && dashboardView === 'Settings') {
+      setPendingProjectId(projectId);
+      setPendingView(null);
+      return;
+    }
+    setSelectedProjectId(projectId);
+  };
+
+  const renderDirtyModal = () => (
+    <Modal
+      isOpen={!!pendingView || !!pendingProjectId}
+      onClose={() => {
+        setPendingView(null);
+        setPendingProjectId(null);
+      }}
+      title="Unsaved Changes"
+      size="sm"
+      isElevatedFooter
+      footer={
+        <div className="flex justify-end gap-3">
+          <Button
+            variant="ghost"
+            onClick={() => {
+              settingsRef.current?.discard();
+              const nextView = pendingView;
+              const nextProject = pendingProjectId;
+              setPendingView(null);
+              setPendingProjectId(null);
+              if (nextView) {
+                setDashboardView(nextView);
+                setSelectedProjectId(null);
+                setSelectedUserId(null);
+              } else if (nextProject) {
+                setDashboardView('Projects');
+                setSelectedProjectId(nextProject);
+              }
+            }}
+            className="bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10"
+          >
+            Discard
+          </Button>
+          <Button
+            variant="metallic"
+            onClick={async () => {
+              await settingsRef.current?.save();
+              const nextView = pendingView;
+              const nextProject = pendingProjectId;
+              setPendingView(null);
+              setPendingProjectId(null);
+              if (nextView) {
+                setDashboardView(nextView);
+                setSelectedProjectId(null);
+                setSelectedUserId(null);
+              } else if (nextProject) {
+                setDashboardView('Projects');
+                setSelectedProjectId(nextProject);
+              }
+            }}
+            className="px-8 shadow-lg shadow-brand-primary/20"
+          >
+            Save & Continue
+          </Button>
+        </div>
+      }
+    >
+      <div className="flex flex-col items-center text-center py-4">
+        <div className="w-16 h-16 rounded-2xl bg-brand-primary/10 flex items-center justify-center text-brand-primary mb-6 animate-pulse">
+          <IconSettings className="w-8 h-8" />
+        </div>
+        <h3 className="text-xl font-bold text-white mb-2">Wait! You have unsaved changes</h3>
+        <p className="text-sm text-gray-400 leading-relaxed max-w-[280px]">
+          You were in the middle of updating your account settings. Would you like to save these changes before leaving?
+        </p>
+      </div>
+    </Modal>
+  );
+
+
+  const renderDashboardContent = () => {
+    try {
+      if (dashboardView === 'Projects') {
+        return (
+          <>
+            <div className={selectedProjectId ? 'hidden' : 'block h-full'}>
+              <Projects
+                ref={projectsRef}
+                onProjectOpen={setSelectedProjectId}
+                isProjectOpen={!!selectedProjectId}
+              />
+            </div>
+            {selectedProjectId && (
+              <ProjectDetails
+                projectId={selectedProjectId}
+                onBack={() => setSelectedProjectId(null)}
+                onStatusChange={() => projectsRef.current?.refresh()}
+              />
+            )}
+          </>
+        );
+      }
+
+      switch (dashboardView) {
+        case 'Dashboard': return <Dashboard />;
+        case 'Tasks': return <Tasks />;
+        case 'Analytics': return <Analytics />;
+        case 'Finances': return <Finances />;
+        case 'Earnings': return <Earnings />;
+        case 'Accounts': return <Accounts />;
+        case 'Assets': return <Assets />;
+        case 'Chats': return <Chats />;
+        case 'Users': return (
+          <>
+            <div className={selectedUserId ? 'hidden' : 'block h-full'}>
+              <Users
+                ref={usersRef}
+                onUserOpen={setSelectedUserId}
+                isUserOpen={!!selectedUserId}
+              />
+            </div>
+            {selectedUserId && (
+              <UserDetails
+                userId={selectedUserId}
+                onBack={() => setSelectedUserId(null)}
+                onStatusChange={() => usersRef.current?.refresh()}
+              />
+            )}
+          </>
+        );
+        case 'Channels': return <Channels />;
+        case 'Forms': return <Forms />;
+        case 'Integrations': return <Integrations />;
+        case 'Settings': return (
+          <Settings
+            ref={settingsRef}
+            onBack={() => handleItemSelect('Dashboard')}
+            onDirtyChange={setIsSettingsDirty}
+          />
+        );
+        case 'Profile': return (
+          <Settings
+            ref={settingsRef}
+            onBack={() => handleItemSelect('Dashboard')}
+            onDirtyChange={setIsSettingsDirty}
+            profileOnly
+          />
+        );
+        case 'Reminders': return <Reminders />;
+
+        default: return <Dashboard />;
+      }
+    } catch (err) {
+      console.error("Dashboard content render error:", err);
+      return <div className="p-20 text-center"><h2 className="text-white">Something went wrong</h2><p className="text-gray-500">Please try refreshing the page.</p></div>;
+    }
+  };
+
+  return (
+    <UserProvider>
+      <AccountProvider>
+        <NotificationProvider>
+          {loading ? (
+            <div className="min-h-screen bg-surface-bg flex items-center justify-center">
+              <div className="w-12 h-12 border-2 border-brand-primary/20 border-t-brand-primary rounded-full animate-spin" />
+            </div>
+          ) : view === 'dashboard' ? (
+            session ? (
+              <DashboardLayout
+                onSignOut={handleSignOut}
+                activeItem={dashboardView}
+                onItemSelect={handleItemSelect}
+                onProjectOpen={handleProjectOpen}
+                noPadding={!!selectedProjectId}
+              >
+                {renderDashboardContent()}
+              </DashboardLayout>
+            ) : (
+              <div className="min-h-screen bg-surface-bg flex items-center justify-center p-6">
+                <div className="w-full text-center">
+                  <p className="text-gray-400">Redirecting to sign in...</p>
+                </div>
+              </div>
+            )
+          ) : (
+            <div className="min-h-screen bg-surface-bg flex items-center justify-center p-6">
+              <div className="w-full">
+                {view === 'signin' ? (
+                  <SignInScreen
+                    onSuccess={async () => {
+                      const { data: { session: currentSession } } = await supabase.auth.getSession();
+                      if (currentSession) {
+                        const { data: profile } = await supabase
+                          .from('profiles')
+                          .select('status, role, has_seen_welcome')
+                          .eq('id', currentSession.user.id)
+                          .single();
+
+                        if (profile) {
+                          if (profile.role) setSelectedRole(profile.role);
+                          setInitialStatus(profile.status);
+                          setView(determineView(profile, currentSession));
+                        } else if (currentSession.user.user_metadata?.role) {
+                          setSelectedRole(currentSession.user.user_metadata.role);
+                          setInitialStatus('Invited');
+                          setView('complete-profile');
+                        } else {
+                          setDashboardView('Dashboard');
+                          setSelectedProjectId(null);
+                          setSelectedUserId(null);
+                          setView('dashboard');
+                        }
+                      } else {
+                        setView('dashboard');
+                      }
+                    }}
+                  />
+
+                ) : view === 'complete-profile' ? (
+                  <CompleteProfile
+                    role={selectedRole}
+                    initialStatus={initialStatus}
+                    onComplete={(isInvited) => {
+                      const isAdmin = selectedRole?.toLowerCase() === 'admin' || selectedRole?.toLowerCase() === 'super admin';
+
+                      if (isInvited) {
+                        setDashboardView('Dashboard');
+                        setSelectedProjectId(null);
+                        setSelectedUserId(null);
+                        setView('welcome');
+                        localStorage.removeItem('nova_onboarding_step');
+                        return;
+                      }
+
+                      const nextView = isAdmin ? 'dashboard' : 'pending-approval';
+                      if (nextView === 'pending-approval') {
+                        localStorage.setItem('nova_onboarding_step', 'pending-approval');
+                      } else {
+                        localStorage.removeItem('nova_onboarding_step');
+                      }
+                      setView(nextView as any);
+                    }}
+                    onBack={() => {
+                      localStorage.setItem('nova_onboarding_step', 'select-role');
+                      setView('select-role');
+                    }}
+                  />
+                ) : view === 'pending-approval' ? (
+                  <PendingApproval
+                    role={selectedRole}
+                    onSignOut={async () => {
+                      localStorage.removeItem('nova_onboarding_step');
+                      localStorage.removeItem('nova_selected_role');
+                      await supabase.auth.signOut();
+                      setView('signin');
+                    }}
+                  />
+                ) : view === 'deactivated' ? (
+                  <PendingApproval
+                    role={selectedRole}
+                    isDeactivated
+                    onSignOut={async () => {
+                      await supabase.auth.signOut();
+                      setView('signin');
+                    }}
+                  />
+                ) : view === 'welcome' ? (
+                  <ThanksScreen
+                    onDashboard={() => {
+                      setDashboardView('Dashboard');
+                      setView('dashboard');
+                    }}
+                  />
+                ) : (
+                  <SelectRole
+                    onRoleSelect={(role) => {
+                      setSelectedRole(role);
+                      localStorage.setItem('nova_onboarding_step', 'complete-profile');
+                      localStorage.setItem('nova_selected_role', role);
+                      setView('complete-profile');
+                    }}
+                    onBack={() => {
+                      localStorage.setItem('nova_onboarding_step', 'signup');
+                      setView('signup');
+                    }}
+                  />
+                )}
+              </div>
+            </div>
+          )}
+          <ReminderOverlay />
+          <ToastContainer />
+          {view === 'dashboard' && pendingView && renderDirtyModal()}
+        </NotificationProvider>
+      </AccountProvider>
+    </UserProvider>
+  );
+};
+
+export default App;
