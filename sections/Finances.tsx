@@ -107,8 +107,13 @@ const PlatformCommission: React.FC = () => {
         if (!selectedCommission) return;
         setSubmitting(true);
         try {
-            const { error } = await supabase.from('platform_commissions').delete().eq('id', selectedCommission.id);
+            // Use select() to verify it actually deleted a row (PostgREST returns deleted rows if selected)
+            const { data, error } = await supabase.from('platform_commissions').delete().eq('id', selectedCommission.id).select();
+
             if (error) throw error;
+            if (!data || data.length === 0) {
+                throw new Error('Deletion failed: The record might have already been removed or you do not have permission.');
+            }
 
             addToast({ type: 'success', title: 'Commission Deleted', message: 'Commission configuration removed successfully.' });
             setCommissions(prev => prev.filter(c => c.id !== selectedCommission.id));
@@ -692,8 +697,12 @@ const PricingSlabs: React.FC = () => {
         if (!selectedSlab) return;
         setSubmitting(true);
         try {
-            const { error } = await supabase.from('pricing_slabs').delete().eq('id', selectedSlab.id);
+            const { data, error } = await supabase.from('pricing_slabs').delete().eq('id', selectedSlab.id).select();
+
             if (error) throw error;
+            if (!data || data.length === 0) {
+                throw new Error('Deletion failed: The record might have already been removed or you do not have permission.');
+            }
 
             addToast({ type: 'success', title: 'Slab Deleted', message: 'Pricing slab removed successfully.' });
             setSlabs(prev => prev.filter(s => s.id !== selectedSlab.id));

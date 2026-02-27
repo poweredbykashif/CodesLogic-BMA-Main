@@ -1,5 +1,5 @@
 -- ============================================
--- NOVA DESIGN SYSTEM - USER DETAILS ENHANCEMENT
+-- CODESLOGIC - USER DETAILS ENHANCEMENT
 -- ============================================
 
 -- Add new fields to profiles table

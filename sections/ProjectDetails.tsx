@@ -42,7 +42,7 @@ interface ProjectDetailsProps {
     onStatusChange?: () => void;
 }
 
-// Helper for dynamic status styles driven by Nova Design System tokens
+// Helper for dynamic status styles driven by CodesLogic tokens
 const getStatusStyles = (status: string) => {
     const s = status?.toLowerCase() || '';
 

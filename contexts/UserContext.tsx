@@ -124,6 +124,7 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }, [effectiveRole, loading]);
 
     const fetchProfile = async () => {
+        setLoading(true);
         try {
             const { data: { session: currentSession } } = await supabase.auth.getSession();
             if (!currentSession) {
@@ -161,19 +162,52 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         fetchProfile();
 
         // Listen for auth changes
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+        const { data: { subscription: authSubscription } } = supabase.auth.onAuthStateChange((event) => {
+            console.log('UserContext: Auth event:', event);
             if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
                 fetchProfile();
             } else if (event === 'SIGNED_OUT') {
                 setProfile(null);
-                setSimulatedRole(null); // Clear simulation on sign out
+                setPermissions([]);
+                setPermissionsLoaded(true);
+                setSimulatedRole(null);
             }
         });
 
         return () => {
-            subscription.unsubscribe();
+            authSubscription.unsubscribe();
         };
     }, []);
+
+    // Effect to handle real-time profile updates separately
+    useEffect(() => {
+        if (!profile?.id) return;
+
+        console.log('Setting up real-time subscription for profile:', profile.id);
+        const profileSubscription = supabase
+            .channel(`profile-updates-${profile.id}`)
+            .on(
+                'postgres_changes',
+                {
+                    event: '*',
+                    schema: 'public',
+                    table: 'profiles',
+                    filter: `id=eq.${profile.id}`
+                },
+                (payload) => {
+                    console.log('👤 Profile updated in real-time:', payload.new);
+                    setProfile(payload.new as UserProfile);
+                }
+            )
+            .subscribe((status) => {
+                console.log(`Real-time subscription status for profile ${profile.id}:`, status);
+            });
+
+        return () => {
+            console.log('Cleaning up profile subscription for:', profile.id);
+            profileSubscription.unsubscribe();
+        };
+    }, [profile?.id]);
 
     const refreshProfile = async () => {
         await fetchProfile();

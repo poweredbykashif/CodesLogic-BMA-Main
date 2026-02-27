@@ -1,7 +1,7 @@
 -- ============================================
--- NOVA DESIGN SYSTEM - DEPLOYMENT SCRIPT
+-- CODESLOGIC - DEPLOYMENT SCRIPT
 -- ============================================
--- This script sets up the entire database schema for the Nova Design System.
+-- This script sets up the entire database schema for CodesLogic.
 -- It is designed for a fresh Supabase instance or to update an existing one idempotently.
 -- ============================================
 

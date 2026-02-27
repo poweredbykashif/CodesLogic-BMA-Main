@@ -4,7 +4,7 @@ import { Card, Modal, ElevatedMetallicCard } from '../components/Surfaces';
 import Button from '../components/Button';
 import { Input } from '../components/Input';
 import { Avatar } from '../components/Avatar';
-import { IconSettings, IconUser, IconBell, IconLogout, IconCreditCard, IconPhone, IconMaximize, IconFileImage, IconMail, IconLock, IconDollar, IconShield, IconBuilding } from '../components/Icons';
+import { IconUser, IconMail, IconPhone, IconCreditCard, IconLock, IconShield, IconBuilding, IconSettings, IconFileImage, IconMaximize, IconDollar, IconCheck, IconX } from '../components/Icons';
 import { Tabs } from '../components/Navigation';
 import { Switch } from '../components/Selection';
 import { supabase } from '../lib/supabase';
@@ -23,6 +23,8 @@ const Settings = React.forwardRef<{ save: () => Promise<void>; discard: () => vo
     const [settingsTab, setSettingsTab] = useState<'profile' | 'page-access' | 'account-access'>(() => getInitialTab('Settings', 'profile') as any);
     const [updating, setUpdating] = useState(false);
     const [saving, setSaving] = useState(false);
+    const [uploadingAvatar, setUploadingAvatar] = useState(false);
+    const [persistedLocalPreview, setPersistedLocalPreview] = useState<string | null>(null);
     const [previewImage, setPreviewImage] = useState<string | null>(null);
     const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
     const [passwordData, setPasswordData] = useState({
@@ -45,29 +47,42 @@ const Settings = React.forwardRef<{ save: () => Promise<void>; discard: () => vo
     }));
 
     const [formData, setFormData] = useState({
+        name: '',
         payment_email: '',
         bank_name: '',
         account_title: '',
         iban: ''
     });
 
-    React.useEffect(() => {
-        if (profile) {
-            setFormData({
-                payment_email: profile.payment_email || '',
-                bank_name: profile.bank_name || '',
-                account_title: profile.account_title || '',
-                iban: profile.iban || ''
-            });
-        }
-    }, [profile]);
+    const [avatarDraft, setAvatarDraft] = useState<{ file: File; localUrl: string; publicUrl?: string } | null>(null);
 
     const isDirty = profile ? (
+        formData.name.trim() !== (profile.name || '').trim() ||
         formData.payment_email !== (profile.payment_email || '') ||
         formData.bank_name !== (profile.bank_name || '') ||
         formData.account_title !== (profile.account_title || '') ||
-        formData.iban !== (profile.iban || '')
+        formData.iban !== (profile.iban || '') ||
+        avatarDraft !== null
     ) : false;
+
+    const lastProfileId = React.useRef<string | null>(null);
+
+    React.useEffect(() => {
+        if (profile) {
+            // Only update form data if it's the first load, a different user, or the form is NOT dirty
+            // This prevents overwriting user's unsaved edits during background refreshes (like after avatar upload)
+            if (profile.id !== lastProfileId.current || !isDirty) {
+                setFormData({
+                    name: profile.name || '',
+                    payment_email: profile.payment_email || '',
+                    bank_name: profile.bank_name || '',
+                    account_title: profile.account_title || '',
+                    iban: profile.iban || ''
+                });
+                lastProfileId.current = profile.id;
+            }
+        }
+    }, [profile, isDirty]);
 
     React.useEffect(() => {
         onDirtyChange?.(isDirty);
@@ -96,22 +111,61 @@ const Settings = React.forwardRef<{ save: () => Promise<void>; discard: () => vo
 
         setSaving(true);
         try {
+            let finalAvatarUrl = profile.avatar_url;
+
+            // 1. If there's a pending avatar, upload it first
+            if (avatarDraft) {
+                setUploadingAvatar(true);
+                const fileName = `${profile.id}-${Math.random().toString(36).substring(2, 7)}.${avatarDraft.file.name.split('.').pop()}`;
+
+                const { error: uploadError } = await supabase.storage
+                    .from('avatars')
+                    .upload(fileName, avatarDraft.file);
+
+                if (uploadError) throw uploadError;
+
+                const { data } = supabase.storage
+                    .from('avatars')
+                    .getPublicUrl(fileName);
+
+                finalAvatarUrl = data.publicUrl;
+                // Update draft with public URL so we can compare later
+                setAvatarDraft(prev => prev ? { ...prev, publicUrl: finalAvatarUrl } : null);
+            }
+
+            // 2. Update all fields including avatar_url if changed
             const { error } = await supabase
                 .from('profiles')
                 .update({
+                    name: formData.name,
                     payment_email: formData.payment_email,
                     bank_name: formData.bank_name,
                     account_title: formData.account_title,
-                    iban: formData.iban
+                    iban: formData.iban,
+                    avatar_url: finalAvatarUrl
                 })
                 .eq('id', profile.id);
 
             if (error) throw error;
 
+            addToast({ type: 'success', title: 'Settings Saved', message: 'Your profile has been updated successfully.' });
+
+            // 3. Refresh Profile data first
             await refreshProfile();
-            addToast({ type: 'success', title: 'Settings Saved', message: 'Your payment information has been updated successfully.' });
+
+            // 4. SEAMLESS HANDOFF:
+            // Move the draft's local URL to a standby state that doesn't trigger "isDirty"
+            // This makes the button disappear immediately while keeping the image visible
+            if (avatarDraft) {
+                setPersistedLocalPreview(avatarDraft.localUrl);
+                setAvatarDraft(null); // Button disappears now because isDirty becomes false
+            }
+
+            setUploadingAvatar(false);
+
         } catch (error: any) {
             console.error('Error saving settings:', error);
+            setUploadingAvatar(false);
             addToast({ type: 'error', title: 'Save Failed', message: error.message });
         } finally {
             setSaving(false);
@@ -121,6 +175,7 @@ const Settings = React.forwardRef<{ save: () => Promise<void>; discard: () => vo
     const handleDiscardChanges = () => {
         if (profile) {
             setFormData({
+                name: profile.name || '',
                 payment_email: profile.payment_email || '',
                 bank_name: profile.bank_name || '',
                 account_title: profile.account_title || '',
@@ -166,47 +221,23 @@ const Settings = React.forwardRef<{ save: () => Promise<void>; discard: () => vo
         fileInputRef.current?.click();
     };
 
+    const [localAvatarPreview, setLocalAvatarPreview] = useState<string | null>(null);
     const handleAvatarChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file || !profile) return;
 
-        setUpdating(true);
-        try {
-            const fileExt = file.name.split('.').pop();
-            const fileName = `${profile.id}-${Math.random()}.${fileExt}`;
-            const filePath = `${fileName}`;
+        // Cleanup previous draft if any
+        if (avatarDraft) URL.revokeObjectURL(avatarDraft.localUrl);
 
-            // 1. Upload to storage (avatars bucket)
-            const { error: uploadError } = await supabase.storage
-                .from('avatars')
-                .upload(filePath, file, {
-                    cacheControl: '3600',
-                    upsert: true
-                });
+        // Set local draft preview immediately
+        const localUrl = URL.createObjectURL(file);
+        setAvatarDraft({ file, localUrl });
 
-            if (uploadError) throw uploadError;
-
-            // 2. Get public URL
-            const { data: { publicUrl } } = supabase.storage
-                .from('avatars')
-                .getPublicUrl(filePath);
-
-            // 3. Update profile mapping
-            const { error: updateError } = await supabase
-                .from('profiles')
-                .update({ avatar_url: publicUrl })
-                .eq('id', profile.id);
-
-            if (updateError) throw updateError;
-
-            await refreshProfile();
-            addToast({ type: 'success', title: 'Avatar Updated', message: 'Your profile picture has been updated.' });
-        } catch (error: any) {
-            console.error('Error uploading avatar:', error);
-            addToast({ type: 'error', title: 'Update Failed', message: error.message });
-        } finally {
-            setUpdating(false);
-        }
+        addToast({
+            type: 'info',
+            title: 'Photo Selected',
+            message: 'Click "Save Changes" to permanentize your new profile photo.'
+        });
     };
 
     const handleToggleEarningsVisibility = (checked: boolean) => {
@@ -281,8 +312,22 @@ const Settings = React.forwardRef<{ save: () => Promise<void>; discard: () => vo
                                     <Avatar
                                         size="xl"
                                         status="online"
-                                        src={profile?.avatar_url || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&h=200&fit=crop"}
+                                        src={avatarDraft?.localUrl || persistedLocalPreview || profile?.avatar_url}
                                         initials={profile?.name ? profile.name.split(' ').map(n => n[0]).join('').toUpperCase() : '??'}
+                                        loading={uploadingAvatar}
+                                        onLoad={() => {
+                                            // Clear the persisted local preview only when the remote one is actually visible
+                                            if (persistedLocalPreview && !uploadingAvatar && !avatarDraft) {
+                                                console.log('Confirmed: Persistent Avatar loaded. Cleaning up backup preview.');
+                                                URL.revokeObjectURL(persistedLocalPreview);
+                                                setPersistedLocalPreview(null);
+                                            }
+                                        }}
+                                        onError={() => {
+                                            if (persistedLocalPreview && !uploadingAvatar) {
+                                                console.error('Remote avatar failed to load, keeping local backup indefinitely.');
+                                            }
+                                        }}
                                     />
                                     <div className="space-y-3">
                                         <div className="flex gap-3">
@@ -290,7 +335,6 @@ const Settings = React.forwardRef<{ save: () => Promise<void>; discard: () => vo
                                                 variant="metallic"
                                                 size="sm"
                                                 onClick={handleAvatarClick}
-                                                isLoading={updating}
                                             >
                                                 Change Photo
                                             </Button>
@@ -303,15 +347,16 @@ const Settings = React.forwardRef<{ save: () => Promise<void>; discard: () => vo
                                     <Input
                                         label="Display Name"
                                         placeholder="E.g. Alex Rivier"
-                                        value={formatDisplayName(profile?.name)}
-                                        readOnly
-                                        className="cursor-not-allowed"
+                                        value={isSuperAdmin ? formData.name : formatDisplayName(profile?.name)}
+                                        onChange={isSuperAdmin ? (e) => setFormData({ ...formData, name: e.target.value }) : undefined}
+                                        readOnly={!isSuperAdmin}
+                                        className={!isSuperAdmin ? "cursor-not-allowed" : ""}
                                         variant="metallic"
                                         leftIcon={<IconUser className="w-4 h-4" />}
                                     />
                                     <Input
                                         label="Email Address"
-                                        placeholder="E.g. alex@nova.design"
+                                        placeholder="E.g. alex@codeslogic.com"
                                         value={profile?.email || ''}
                                         readOnly
                                         className="cursor-not-allowed"
@@ -325,7 +370,7 @@ const Settings = React.forwardRef<{ save: () => Promise<void>; discard: () => vo
                                         className="cursor-not-allowed"
                                         variant="metallic"
                                     />
-                                    {!isAdmin && (
+                                    {!isAdmin && !isSuperAdmin && (
                                         <Input
                                             label="Phone Number"
                                             value={profile?.phone || 'Not specified'}
@@ -336,11 +381,34 @@ const Settings = React.forwardRef<{ save: () => Promise<void>; discard: () => vo
                                         />
                                     )}
                                 </div>
+
+                                {isSuperAdmin && (isDirty || formData.name.trim() !== (profile?.name || '').trim()) && (
+                                    <div className="flex justify-end gap-3 pt-6 border-t border-white/5 animate-in fade-in slide-in-from-top-2 duration-300">
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={handleDiscardChanges}
+                                            disabled={saving}
+                                            className="px-6"
+                                        >
+                                            Discard
+                                        </Button>
+                                        <Button
+                                            variant="metallic"
+                                            size="sm"
+                                            className="px-8"
+                                            onClick={handleSaveSettings}
+                                            isLoading={saving}
+                                        >
+                                            Save Changes
+                                        </Button>
+                                    </div>
+                                )}
                             </div>
                         </ElevatedMetallicCard>
 
                         {/* Payoneer Details card - Only for Freelancers */}
-                        {isFreelancer && profile && (
+                        {isFreelancer && !isSuperAdmin && profile && (
                             <ElevatedMetallicCard
                                 title="Payoneer Details"
                                 headerClassName="px-8 py-6"
@@ -360,7 +428,7 @@ const Settings = React.forwardRef<{ save: () => Promise<void>; discard: () => vo
                         )}
 
                         {/* Bank Details Section */}
-                        {!isAdmin && (
+                        {!isAdmin && !isSuperAdmin && (
                             <ElevatedMetallicCard
                                 title="Bank Details"
                                 headerClassName="px-8 py-6"
@@ -400,7 +468,7 @@ const Settings = React.forwardRef<{ save: () => Promise<void>; discard: () => vo
                         )}
 
                         {/* Identity Verification Card - For everyone except Admin */}
-                        {!isAdmin && profile && (
+                        {!isAdmin && !isSuperAdmin && profile && (
                             <ElevatedMetallicCard
                                 title="IDENTITY VERIFICATION"
                                 headerClassName="px-8 py-6"
@@ -503,12 +571,12 @@ const Settings = React.forwardRef<{ save: () => Promise<void>; discard: () => vo
                             </div>
                         </ElevatedMetallicCard>
 
-                        {isDirty && (
+                        {isDirty && !isSuperAdmin && (
                             <div className="flex justify-end gap-3 pt-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
                                 <Button variant="ghost" onClick={handleDiscardChanges} disabled={saving}>Discard Changes</Button>
                                 <Button
                                     variant="metallic"
-                                    className="px-8"
+                                    className="px-8 shadow-lg shadow-brand-primary/20"
                                     onClick={handleSaveSettings}
                                     isLoading={saving}
                                 >

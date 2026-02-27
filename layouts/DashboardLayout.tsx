@@ -328,6 +328,13 @@ export const DashboardLayout: React.FC<{
     return hasPerm;
   }) as { name: DashboardView; label?: string; icon: React.ReactNode }[], [hasPermission, effectiveRole, showEarningsHeader]);
 
+  // Save the exact number of items for perfect skeleton hydration next time
+  useEffect(() => {
+    if (!profileLoading && permissionsLoaded) {
+      localStorage.setItem('nova_sidebar_item_count', navItems.length.toString());
+    }
+  }, [navItems.length, profileLoading, permissionsLoaded]);
+
   const isAccessRestricted = (() => {
     const item = ([
       { name: 'Dashboard', permission: 'view_dashboard' },
@@ -417,14 +424,14 @@ export const DashboardLayout: React.FC<{
       >
         <div className={`h-20 shrink-0 flex items-center border-b border-surface-border transition-all duration-300 ${isExpanded ? 'px-5 gap-3' : 'justify-center'}`}>
           <div className="shrink-0">
-            {profileLoading ? (
+            {profileLoading || !permissionsLoaded ? (
               <div className={`rounded-full bg-white/5 animate-pulse ${isExpanded ? 'w-8 h-8' : 'w-10 h-10'}`} />
             ) : (
               <Avatar
                 size={isExpanded ? "sm" : "md"}
                 status="online"
-                src={profile?.avatar_url || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop"}
-                initials={profile?.name?.split(' ').map(n => n[0]).join('')}
+                src={profile?.avatar_url}
+                initials={profile?.name ? profile.name.split(' ').map(n => n[0]).join('').toUpperCase() : '??'}
                 className="transition-all duration-300"
               />
             )}
@@ -450,9 +457,9 @@ export const DashboardLayout: React.FC<{
 
         <nav className="flex-1 px-3 overflow-x-hidden overflow-y-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent hover:scrollbar-thumb-white/20 [scrollbar-gutter:stable]">
           <div className="mt-3 pb-4 space-y-2">
-            {profileLoading ? (
-              // Skeleton items
-              Array.from({ length: 8 }).map((_, i) => (
+            {(profileLoading || (profile && !permissionsLoaded)) ? (
+              // Exact number of Skeleton items based on previous session, defaulting to a minimal 3
+              Array.from({ length: parseInt(localStorage.getItem('nova_sidebar_item_count') || '8') }).map((_, i) => (
                 <div
                   key={i}
                   className={`h-12 rounded-xl bg-white/[0.02] border border-transparent animate-pulse flex items-center ${isExpanded ? 'w-full px-4' : 'w-12 mx-auto justify-center px-0'}`}

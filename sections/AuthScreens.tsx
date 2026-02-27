@@ -9,9 +9,10 @@ import { addToast } from '../components/Toast';
 interface AuthProps {
   onToggle?: () => void;
   onSuccess: () => void;
+  onNavigate?: (view: 'terms' | 'privacy') => void;
 }
 
-export const SignInScreen: React.FC<AuthProps> = ({ onSuccess }) => {
+export const SignInScreen: React.FC<AuthProps> = ({ onSuccess, onNavigate }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [keepSignedIn, setKeepSignedIn] = useState(true);
@@ -79,7 +80,6 @@ export const SignInScreen: React.FC<AuthProps> = ({ onSuccess }) => {
           <div>
             <div className="flex justify-between items-center mb-1 pr-1">
               <label className="text-sm font-medium text-gray-400 ml-1">Password</label>
-              <a href="#" className="text-xs text-brand-primary hover:underline">Forgot password?</a>
             </div>
             <Input
               type="password"
@@ -93,7 +93,7 @@ export const SignInScreen: React.FC<AuthProps> = ({ onSuccess }) => {
           </div>
 
           <Checkbox
-            label="Keep me Signed In"
+            label="Remember Me"
             variant="recessed"
             checked={keepSignedIn}
             onChange={setKeepSignedIn}
@@ -107,6 +107,10 @@ export const SignInScreen: React.FC<AuthProps> = ({ onSuccess }) => {
           >
             Sign In
           </Button>
+
+          <p className="text-[11px] text-gray-500 leading-relaxed text-center px-4 mt-6">
+            By signing in, you agree to our <button type="button" onClick={() => onNavigate?.('terms')} className="text-white hover:underline bg-transparent border-none p-0">Terms of Service</button> and <button type="button" onClick={() => onNavigate?.('privacy')} className="text-white hover:underline bg-transparent border-none p-0">Privacy Policy</button>.
+          </p>
         </form>
 
 
@@ -115,7 +119,7 @@ export const SignInScreen: React.FC<AuthProps> = ({ onSuccess }) => {
   );
 };
 
-export const SignUpScreen: React.FC<AuthProps> = ({ onToggle, onSuccess }) => {
+export const SignUpScreen: React.FC<AuthProps> = ({ onToggle, onSuccess, onNavigate }) => {
   const [email, setEmail] = React.useState('');
   const [password, setPassword] = React.useState('');
   const [confirmPassword, setConfirmPassword] = React.useState('');
@@ -277,7 +281,7 @@ export const SignUpScreen: React.FC<AuthProps> = ({ onToggle, onSuccess }) => {
           />
 
           <p className="text-[11px] text-gray-500 leading-relaxed text-center px-4">
-            By signing up, you agree to our <a href="#" className="text-white hover:underline">Terms of Service</a> and <a href="#" className="text-white hover:underline">Privacy Policy</a>.
+            By signing up, you agree to our <button type="button" onClick={() => onNavigate?.('terms')} className="text-white hover:underline bg-transparent border-none p-0">Terms of Service</button> and <button type="button" onClick={() => onNavigate?.('privacy')} className="text-white hover:underline bg-transparent border-none p-0">Privacy Policy</button>.
           </p>
 
           <Button

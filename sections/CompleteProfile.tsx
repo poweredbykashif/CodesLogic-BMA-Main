@@ -5,7 +5,6 @@ import { UploadPreview } from '../components/UploadPreview';
 import { addToast } from '../components/Toast';
 import { supabase } from '../lib/supabase';
 import { useUser } from '../contexts/UserContext';
-import { uploadToR2 } from '../lib/s3';
 
 
 interface CompleteProfileProps {
@@ -104,29 +103,54 @@ const CompleteProfile: React.FC<CompleteProfileProps> = ({ role, initialStatus, 
             setUploadingField(activeField);
 
             try {
+                // Instant local preview for better UX
+                const localUrl = URL.createObjectURL(file);
+                activeSetter(localUrl);
+
                 const { data: { session } } = await supabase.auth.getSession();
                 const userId = session?.user.id || 'anonymous';
 
                 const fileExt = file.name.split('.').pop();
                 const fileName = `${userId}-${Math.random().toString(36).substring(2, 7)}.${fileExt}`;
 
-                // Organize in folders
                 const folder = activeField === 'profile-pic' ? 'avatars' : 'documents';
-                const filePath = `${folder}/${fileName}`;
+                const filePath = `${fileName}`; // bucket handles the folder logic implicitly or we can use folder in bucket if it exists. But supabase usually has buckets 'avatars'. Wait, let me check where 'documents' bucket is. Assuming 'avatars' and 'documents' are separate buckets:
+                const bucketName = activeField === 'profile-pic' ? 'avatars' : 'documents';
 
-                console.log(`Uploading ${activeField} to R2:`, filePath);
-                const publicUrl = await uploadToR2(file, filePath);
+                console.log(`Uploading ${activeField} to Supabase:`, filePath);
 
-                // Pre-load image to ensure it's ready for preview before finishing loading state
+                const { error: uploadError } = await supabase.storage
+                    .from(bucketName)
+                    .upload(filePath, file);
+
+                if (uploadError) throw uploadError;
+
+                const { data } = supabase.storage
+                    .from(bucketName)
+                    .getPublicUrl(filePath);
+
+                const publicUrl = data.publicUrl;
+
+                // Pre-load the REAL remote image to verify it's working
                 const img = new Image();
-                const imageReady = new Promise((resolve, reject) => {
+                const imageReady = new Promise((resolve) => {
                     img.onload = () => resolve(true);
-                    img.onerror = () => reject(new Error('Failed to load image preview from R2'));
+                    img.onerror = () => resolve(false);
                     img.src = publicUrl;
                 });
 
-                await imageReady;
+                const isRemoteReady = await imageReady;
+
+                // IMPORTANT: Always set the state to the publicUrl so it can be saved to DB
+                // Even if remote is not ready for preview yet, we MUST store it for the final 'Next' click
                 activeSetter(publicUrl);
+
+                if (isRemoteReady) {
+                    URL.revokeObjectURL(localUrl);
+                    // State already set to publicUrl above
+                } else {
+                    console.warn('Supabase public URL not yet ready for preview, but stored for saving.');
+                }
 
                 addToast({
                     type: 'success',

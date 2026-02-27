@@ -132,23 +132,22 @@ const UserDetails: React.FC<UserDetailsProps> = ({ userId, onBack, onStatusChang
 
         setIsAvatarUploading(true);
         try {
-            const fileExt = file.name.split('.').pop();
-            const fileName = `${userId}-${Math.random()}.${fileExt}`;
-            const filePath = `avatars/${fileName}`;
+            // 1. Upload to Supabase Storage
+            const fileName = `${userId}-${Math.random().toString(36).substring(2, 7)}.${file.name.split('.').pop()}`;
 
-            // 1. Upload to storage
             const { error: uploadError } = await supabase.storage
                 .from('avatars')
-                .upload(filePath, file);
+                .upload(fileName, file);
 
             if (uploadError) throw uploadError;
 
-            // 2. Get public URL
-            const { data: { publicUrl } } = supabase.storage
+            const { data } = supabase.storage
                 .from('avatars')
-                .getPublicUrl(filePath);
+                .getPublicUrl(fileName);
 
-            // 3. Update profile
+            const publicUrl = data.publicUrl;
+
+            // 2. Update profile mapping in database
             const { error: updateError } = await supabase
                 .from('profiles')
                 .update({ avatar_url: publicUrl })

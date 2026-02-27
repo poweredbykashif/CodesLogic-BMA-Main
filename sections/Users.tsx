@@ -59,6 +59,7 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
     const [activeTab, setActiveTab] = useState(getInitialTab('Users', 'users'));
     const [selectedIds, setSelectedIds] = useState<string[]>([]);
     const [isSelectionMode, setIsSelectionMode] = useState(false);
+    const [filterState, setFilterState] = useState<'total' | 'active' | 'pending'>('total');
 
     // Team Modal State
     const [isTeamModalOpen, setIsTeamModalOpen] = useState(false);
@@ -69,6 +70,8 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
     const [availableAccounts, setAvailableAccounts] = useState<any[]>([]);
     const [isBulkConfirmOpen, setIsBulkConfirmOpen] = useState(false);
     const [pendingBulkAction, setPendingBulkAction] = useState<string | null>(null);
+    const [isDeleteTeamModalOpen, setIsDeleteTeamModalOpen] = useState(false);
+    const [teamToDelete, setTeamToDelete] = useState<any | null>(null);
 
     const tabs = [
         { id: 'users', label: 'Users', icon: <IconUser size={16} /> },
@@ -127,6 +130,7 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
                 email: p.email,
                 role: p.role,
                 status: p.status,
+                avatar_url: p.avatar_url,
                 joined: new Date(p.created_at).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' }),
                 isInvitation: false
             })));
@@ -229,7 +233,14 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
 
 
     const allMembers = useMemo(() => {
-        const combined = [...profiles, ...invitations];
+        let combined = [...profiles, ...invitations];
+
+        if (filterState === 'active') {
+            combined = combined.filter(m => m.status === 'Active');
+        } else if (filterState === 'pending') {
+            combined = combined.filter(m => m.isInvitation || m.status === 'Pending');
+        }
+
         if (!searchQuery) return combined;
         const q = searchQuery.toLowerCase();
         return combined.filter(m =>
@@ -237,7 +248,7 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
             m.email.toLowerCase().includes(q) ||
             m.role.toLowerCase().includes(q)
         );
-    }, [profiles, invitations, searchQuery]);
+    }, [profiles, invitations, searchQuery, filterState]);
 
     const stats = useMemo(() => {
         return {
@@ -256,12 +267,21 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
         if (!userToRemove) return;
 
         setIsUpdating(true);
-        const table = userToRemove.isInvitation ? 'member_invitations' : 'profiles';
         try {
-            const { error } = await supabase
-                .from(table)
-                .delete()
-                .eq('id', userToRemove.id);
+            let error;
+            if (userToRemove.isInvitation) {
+                const { error: inviteError } = await supabase
+                    .from('member_invitations')
+                    .delete()
+                    .eq('id', userToRemove.id);
+                error = inviteError;
+            } else {
+                // Use RPC to delete from both auth.users and public.profiles
+                const { error: rpcError } = await supabase.rpc('delete_user_entirely', {
+                    target_user_id: userToRemove.id
+                });
+                error = rpcError;
+            }
 
             if (error) throw error;
             addToast({ type: 'success', title: 'Member Removed', message: `${userToRemove.email} has been removed from the directory.` });
@@ -343,14 +363,17 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
                 const inviteIds = invitations.filter(i => selectedIds.includes(i.id)).map(i => i.id);
 
                 if (profileIds.length > 0) {
-                    const { error } = await supabase.from('profiles').delete().in('id', profileIds);
+                    // Use bulk RPC to delete from both auth.users and public.profiles
+                    const { error } = await supabase.rpc('delete_users_bulk', {
+                        target_user_ids: profileIds
+                    });
                     if (error) throw error;
                 }
                 if (inviteIds.length > 0) {
                     const { error } = await supabase.from('member_invitations').delete().in('id', inviteIds);
                     if (error) throw error;
                 }
-                addToast({ type: 'success', title: 'Bulk Action', message: `Permanently deleted ${selectedIds.length} selected items.` });
+                addToast({ type: 'success', title: 'Bulk Action', message: `Permanently deleted ${selectedIds.length} selected items from the system.` });
             } else {
                 let status = '';
                 if (pendingBulkAction === 'activate' || pendingBulkAction === 'approve') status = 'Active';
@@ -567,6 +590,33 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
         }
     };
 
+    const handleDeleteTeam = async () => {
+        if (!teamToDelete) return;
+
+        setIsUpdating(true);
+        try {
+            const { error } = await supabase
+                .from('teams')
+                .delete()
+                .eq('id', teamToDelete.id);
+
+            if (error) throw error;
+            addToast({ type: 'success', title: 'Team Deleted', message: `${teamToDelete.name} has been removed successfully.` });
+            fetchTeams();
+            setIsDeleteTeamModalOpen(false);
+            setTeamToDelete(null);
+        } catch (error: any) {
+            addToast({ type: 'error', title: 'Deletion Failed', message: error.message });
+        } finally {
+            setIsUpdating(false);
+        }
+    };
+
+    const confirmDeleteTeam = (team: any) => {
+        setTeamToDelete(team);
+        setIsDeleteTeamModalOpen(true);
+    };
+
     const projectManagers = useMemo(() => {
         return profiles
             .filter(p => {
@@ -609,6 +659,7 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
                     <div className="flex items-center gap-3">
                         <Avatar
                             size="sm"
+                            src={item.avatar_url}
                             status={item.status === 'Active' ? 'online' : item.status === 'Pending' ? 'away' : 'offline'}
                             initials={(() => {
                                 const parts = item.name?.split(' ').filter(Boolean) || [];
@@ -760,7 +811,7 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
                     options={[
                         { label: 'View', icon: <IconUser size={14} />, onClick: () => onUserOpen(item.id) },
                         ...(hasPermission('edit_users') ? [{ label: 'Edit', icon: <IconEdit size={14} />, onClick: () => console.log('Edit', item.id) }] : []),
-                        ...(hasPermission('delete_users') ? [{ label: 'Delete', icon: <IconTrash size={14} />, variant: 'danger' as const, onClick: () => console.log('Delete', item.id) }] : [])
+                        ...(hasPermission('manage_teams') ? [{ label: 'Delete', icon: <IconTrash size={14} />, variant: 'danger' as const, onClick: () => confirmDeleteTeam(item) }] : [])
                     ]}
                 />
             )
@@ -793,82 +844,91 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                         <Card
                             isElevated={true}
-                            className="h-full p-0 border border-white/10 bg-[#1A1A1A] rounded-2xl relative overflow-hidden group min-h-[140px]"
+                            disableHover={filterState === 'total'}
+                            className={`h-full p-0 border-2 rounded-2xl relative overflow-hidden group min-h-[140px] cursor-pointer transition-all duration-300 ${filterState === 'total'
+                                ? 'bg-gradient-to-b from-[#FF6B4B] to-[#D9361A] border-[#FF4D2D] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_-1px_0_rgba(0,0,0,0.2)]'
+                                : 'border-white/10 bg-[#1A1A1A] hover:border-brand-primary/30'
+                                }`}
                             bodyClassName="h-full flex flex-col justify-between"
+                            onClick={() => setFilterState('total')}
                         >
                             {/* Full Surface Metallic Shine */}
-                            <div className="absolute inset-0 bg-[linear-gradient(115deg,rgba(255,255,255,0.02)_0%,rgba(255,255,255,0.05)_40%,rgba(255,255,255,0.1)_50%,rgba(255,255,255,0.05)_60%,rgba(255,255,255,0.02)_100%)] pointer-events-none opacity-70" />
+                            <div className={`absolute inset-0 bg-[linear-gradient(115deg,rgba(255,255,255,0.02)_0%,rgba(255,255,255,0.05)_40%,rgba(255,255,255,0.1)_50%,rgba(255,255,255,0.05)_60%,rgba(255,255,255,0.02)_100%)] pointer-events-none ${filterState === 'total' ? 'opacity-100' : 'opacity-70'}`} />
                             <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.05)_0%,transparent_70%)] pointer-events-none" />
 
                             <div className="p-6 relative z-10 w-full h-full flex flex-col justify-between">
                                 <div className="flex justify-between items-start">
                                     <div className="space-y-1">
-                                        <p className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em] mb-2">Total Members</p>
+                                        <p className={`text-[10px] font-bold uppercase tracking-[0.2em] mb-2 ${filterState === 'total' ? 'text-white/80' : 'text-gray-500'}`}>Total Members</p>
                                         <p className="text-4xl font-bold text-white tracking-tight">{stats.total}</p>
                                     </div>
-                                    <div className="w-12 h-12 rounded-2xl bg-brand-primary/10 flex items-center justify-center text-brand-primary border border-brand-primary/20 shadow-lg shadow-brand-primary/5 group-hover:scale-110 transition-transform duration-500">
+                                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center border transition-all ${filterState === 'total' ? 'bg-white/20 border-white/30 text-white' : 'bg-white/5 border-white/10 text-gray-400 group-hover:bg-brand-primary/10 group-hover:border-brand-primary/20 group-hover:text-brand-primary'}`}>
                                         <IconUser size={24} />
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-2 mt-4">
-                                    <span className="text-[10px] font-bold text-brand-success bg-brand-success/10 px-2 py-0.5 rounded-full border border-brand-success/20">+12%</span>
-                                    <span className="text-[10px] font-medium text-gray-500 uppercase tracking-widest">Growth this month</span>
+                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${filterState === 'total' ? 'bg-white/20 border-white/30 text-white' : 'text-brand-success bg-brand-success/10 border-brand-success/20'}`}>+12%</span>
+                                    <span className={`text-[10px] font-medium uppercase tracking-widest ${filterState === 'total' ? 'text-white/70' : 'text-gray-500'}`}>Growth this month</span>
                                 </div>
                             </div>
                         </Card>
 
                         <Card
                             isElevated={true}
-                            className="h-full p-0 border border-white/10 bg-[#1A1A1A] rounded-2xl relative overflow-hidden group min-h-[140px]"
+                            disableHover={filterState === 'active'}
+                            className={`h-full p-0 border-2 rounded-2xl relative overflow-hidden group min-h-[140px] cursor-pointer transition-all duration-300 ${filterState === 'active'
+                                ? 'bg-gradient-to-b from-[#FF6B4B] to-[#D9361A] border-[#FF4D2D] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_-1px_0_rgba(0,0,0,0.2)]'
+                                : 'border-white/10 bg-[#1A1A1A] hover:border-brand-primary/30'
+                                }`}
                             bodyClassName="h-full flex flex-col justify-between"
+                            onClick={() => setFilterState('active')}
                         >
                             {/* Full Surface Metallic Shine */}
-                            <div className="absolute inset-0 bg-[linear-gradient(115deg,rgba(255,255,255,0.02)_0%,rgba(255,255,255,0.05)_40%,rgba(255,255,255,0.1)_50%,rgba(255,255,255,0.05)_60%,rgba(255,255,255,0.02)_100%)] pointer-events-none opacity-70" />
+                            <div className={`absolute inset-0 bg-[linear-gradient(115deg,rgba(255,255,255,0.02)_0%,rgba(255,255,255,0.05)_40%,rgba(255,255,255,0.1)_50%,rgba(255,255,255,0.05)_60%,rgba(255,255,255,0.02)_100%)] pointer-events-none ${filterState === 'active' ? 'opacity-100' : 'opacity-70'}`} />
                             <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.05)_0%,transparent_70%)] pointer-events-none" />
 
                             <div className="p-6 relative z-10 w-full h-full flex flex-col justify-between">
                                 <div className="flex justify-between items-start">
                                     <div className="space-y-1">
-                                        <p className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em] mb-2">Active Now</p>
+                                        <p className={`text-[10px] font-bold uppercase tracking-[0.2em] mb-2 ${filterState === 'active' ? 'text-white/80' : 'text-gray-500'}`}>Active Now</p>
                                         <p className="text-4xl font-bold text-white tracking-tight">{stats.active}</p>
                                     </div>
-                                    <div className="w-12 h-12 rounded-2xl bg-brand-success/10 flex items-center justify-center text-brand-success border border-brand-success/20 shadow-lg shadow-brand-success/5 group-hover:scale-110 transition-transform duration-500">
+                                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center border transition-all ${filterState === 'active' ? 'bg-white/20 border-white/30 text-white' : 'bg-white/5 border-white/10 text-gray-400 group-hover:bg-brand-success/10 group-hover:border-brand-success/20 group-hover:text-brand-success'}`}>
                                         <div className="relative">
                                             <IconClock size={24} />
-                                            <div className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-brand-success border-2 border-surface-card animate-pulse" />
+                                            <div className={`absolute -top-1 -right-1 w-3 h-3 rounded-full border-2 animate-pulse ${filterState === 'active' ? 'bg-white border-[#FF4D2D]' : 'bg-brand-success border-surface-card opacity-50 group-hover:opacity-100'}`} />
                                         </div>
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-2 mt-4">
-                                    <span className="text-[10px] font-bold text-gray-400 bg-white/5 px-2 py-0.5 rounded-full border border-white/10 uppercase tracking-widest">Real-time sync</span>
+                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase tracking-widest ${filterState === 'active' ? 'bg-white/20 border-white/30 text-white' : 'text-gray-400 bg-white/5 border-white/10'}`}>Real-time sync</span>
                                 </div>
                             </div>
                         </Card>
 
                         <Card
                             isElevated={true}
-                            className="h-full p-0 border border-white/10 bg-[#1A1A1A] rounded-2xl relative overflow-hidden group min-h-[140px]"
+                            disableHover={filterState === 'pending'}
+                            className={`h-full p-0 border-2 rounded-2xl relative overflow-hidden group min-h-[140px] cursor-pointer transition-all duration-300 ${filterState === 'pending'
+                                ? 'bg-gradient-to-b from-[#FF6B4B] to-[#D9361A] border-[#FF4D2D] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_-1px_0_rgba(0,0,0,0.2)]'
+                                : 'border-white/10 bg-[#1A1A1A] hover:border-brand-primary/30'
+                                }`}
                             bodyClassName="h-full flex flex-col justify-between"
+                            onClick={() => setFilterState('pending')}
                         >
                             {/* Full Surface Metallic Shine */}
-                            <div className="absolute inset-0 bg-[linear-gradient(115deg,rgba(255,255,255,0.02)_0%,rgba(255,255,255,0.05)_40%,rgba(255,255,255,0.1)_50%,rgba(255,255,255,0.05)_60%,rgba(255,255,255,0.02)_100%)] pointer-events-none opacity-70" />
+                            <div className={`absolute inset-0 bg-[linear-gradient(115deg,rgba(255,255,255,0.02)_0%,rgba(255,255,255,0.05)_40%,rgba(255,255,255,0.1)_50%,rgba(255,255,255,0.05)_60%,rgba(255,255,255,0.02)_100%)] pointer-events-none ${filterState === 'pending' ? 'opacity-100' : 'opacity-70'}`} />
                             <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.05)_0%,transparent_70%)] pointer-events-none" />
 
                             <div className="p-6 relative z-10 w-full h-full flex flex-col justify-between">
                                 <div className="flex justify-between items-start">
                                     <div className="space-y-1">
-                                        <p className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em] mb-2">Invites Pending</p>
+                                        <p className={`text-[10px] font-bold uppercase tracking-[0.2em] mb-2 ${filterState === 'pending' ? 'text-white/80' : 'text-gray-500'}`}>Invites Pending</p>
                                         <p className="text-4xl font-bold text-white tracking-tight">{stats.pending}</p>
                                     </div>
-                                    <div className="w-12 h-12 rounded-2xl bg-brand-warning/10 flex items-center justify-center text-brand-warning border border-brand-warning/20 shadow-lg shadow-brand-warning/5 group-hover:scale-110 transition-transform duration-500">
+                                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center border transition-all ${filterState === 'pending' ? 'bg-white/20 border-white/30 text-white' : 'bg-white/5 border-white/10 text-gray-400 group-hover:bg-brand-warning/10 group-hover:border-brand-warning/20 group-hover:text-brand-warning'}`}>
                                         <IconBell size={24} />
                                     </div>
-                                </div>
-                                <div className="mt-4">
-                                    <button className="text-[10px] font-bold text-brand-primary hover:text-brand-primary/80 transition-all uppercase tracking-widest flex items-center gap-1 group/btn">
-                                        Review Applications
-                                        <span className="group-hover:translate-x-1 transition-transform inline-block">→</span>
-                                    </button>
                                 </div>
                             </div>
                         </Card>
@@ -903,10 +963,14 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
 
                                 <Dropdown
                                     options={[
-                                        { label: 'Activate', value: 'activate' },
-                                        { label: 'Approve', value: 'approve' },
-                                        { label: 'Deactivate', value: 'deactivate' },
-                                        { label: 'Delete Permanently', value: 'delete' },
+                                        ...(hasPermission('edit_users') ? [
+                                            { label: 'Activate', value: 'activate' },
+                                            { label: 'Approve', value: 'approve' },
+                                            { label: 'Deactivate', value: 'deactivate' }
+                                        ] : []),
+                                        ...(hasPermission('delete_users') ? [
+                                            { label: 'Delete Permanently', value: 'delete' }
+                                        ] : []),
                                     ]}
                                     value=""
                                     onChange={(val) => handleBulkAction(val)}
@@ -1355,6 +1419,41 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
                             showSearch
                             selectionLabel="Accounts assigned"
                         />
+                    </div>
+                </div>
+            </Modal>
+
+            {/* Delete Team Modal */}
+            <Modal
+                isOpen={isDeleteTeamModalOpen}
+                onClose={() => setIsDeleteTeamModalOpen(false)}
+                title="Delete Team"
+                size="sm"
+                isElevatedFooter={true}
+                footer={
+                    <div className="flex items-center justify-end gap-3 w-full">
+                        <Button variant="recessed" onClick={() => setIsDeleteTeamModalOpen(false)} disabled={isUpdating}>Cancel</Button>
+                        <Button
+                            variant="metallic-error"
+                            onClick={handleDeleteTeam}
+                            isLoading={isUpdating}
+                            className="px-8"
+                        >
+                            Delete Team
+                        </Button>
+                    </div>
+                }
+            >
+                <div className="flex flex-col items-center text-center py-4 space-y-4">
+                    <div className="w-16 h-16 rounded-2xl flex items-center justify-center border-2 bg-red-500/10 border-red-500/20 text-red-500">
+                        <IconTrash size={32} />
+                    </div>
+                    <div className="space-y-2">
+                        <h3 className="text-xl font-bold text-white uppercase tracking-tight">Are you sure?</h3>
+                        <p className="text-sm text-gray-500 max-w-xs mx-auto">
+                            You are about to delete team <span className="text-white font-bold">{teamToDelete?.name}</span>. This will remove all member and account links associated with it.
+                            <span className="block mt-2 text-red-500 font-bold uppercase tracking-[0.1em] text-[10px]">Warning: This cannot be undone.</span>
+                        </p>
                     </div>
                 </div>
             </Modal>

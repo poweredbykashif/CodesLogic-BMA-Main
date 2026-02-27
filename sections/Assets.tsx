@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import Button from '../components/Button';
 import { Table } from '../components/Table';
@@ -11,7 +10,6 @@ import { supabase } from '../lib/supabase';
 import { addToast } from '../components/Toast';
 import { useUser } from '../contexts/UserContext';
 import { useAccounts } from '../contexts/AccountContext';
-import { uploadToR2 } from '../lib/s3';
 
 
 const Assets: React.FC = () => {
@@ -138,10 +136,20 @@ const Assets: React.FC = () => {
             const fileName = `${Math.random().toString(36).substring(2, 11)}_${Date.now()}.${fileExt}`;
             const filePath = `assets/${fileName}`;
 
-            console.log('Starting upload to Cloudflare R2, path:', filePath);
+            console.log('Starting upload to Supabase Storage, path:', filePath);
 
-            // 1. Upload to Cloudflare R2
-            const publicUrl = await uploadToR2(formData.file, filePath);
+            // 1. Upload to Supabase Storage
+            const { error: uploadError } = await supabase.storage
+                .from('assets')
+                .upload(fileName, formData.file);
+            
+            if (uploadError) throw uploadError;
+            
+            const { data } = supabase.storage
+                .from('assets')
+                .getPublicUrl(fileName);
+                
+            const publicUrl = data.publicUrl;
 
             // 2. Save to database (link only)
             const { error: dbError } = await supabase
@@ -156,7 +164,7 @@ const Assets: React.FC = () => {
 
             if (dbError) throw dbError;
 
-            addToast({ type: 'success', title: 'Asset Uploaded', message: 'Your file has been added to the library (Stored on R2).' });
+            addToast({ type: 'success', title: 'Asset Uploaded', message: 'Your file has been added to the library.' });
             setIsUploadModalOpen(false);
 
             setFormData({ name: '', accountId: '', file: null });

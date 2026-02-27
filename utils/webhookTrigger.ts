@@ -40,7 +40,7 @@ export async function triggerWebhooks(event: WebhookPayload['event'], data: any)
                     headers: {
                         'Content-Type': 'application/json',
                         'X-Webhook-Secret': webhook.secret || '',
-                        'X-Nova-Event': event
+                        'X-CodesLogic-Event': event
                     },
                     body: JSON.stringify(payload)
                 });

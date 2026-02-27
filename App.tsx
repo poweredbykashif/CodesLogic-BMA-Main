@@ -25,6 +25,7 @@ import Forms from './sections/Forms';
 
 import { DashboardLayout, DashboardView } from './layouts/DashboardLayout';
 import { SignInScreen, SignUpScreen } from './sections/AuthScreens';
+import { LegalPage } from './sections/Legal';
 import ThanksScreen from './sections/ThanksScreen';
 import { supabase } from './lib/supabase';
 import { Session } from '@supabase/supabase-js';
@@ -36,7 +37,7 @@ import { AccountProvider } from './contexts/AccountContext';
 import { ReminderOverlay } from './components/ReminderOverlay';
 
 
-type View = 'dashboard' | 'signin' | 'signup' | 'select-role' | 'complete-profile' | 'pending-approval' | 'deactivated' | 'welcome';
+type View = 'dashboard' | 'signin' | 'signup' | 'select-role' | 'complete-profile' | 'pending-approval' | 'deactivated' | 'welcome' | 'terms' | 'privacy';
 
 const App: React.FC = () => {
   const initial = getInitialView();
@@ -413,8 +414,13 @@ const App: React.FC = () => {
           ) : (
             <div className="min-h-screen bg-surface-bg flex items-center justify-center p-6">
               <div className="w-full">
-                {view === 'signin' ? (
+                {view === 'terms' ? (
+                  <LegalPage title="Terms of Service" onBack={() => setView('signin')} />
+                ) : view === 'privacy' ? (
+                  <LegalPage title="Privacy Policy" onBack={() => setView('signin')} />
+                ) : view === 'signin' ? (
                   <SignInScreen
+                    onNavigate={(v) => setView(v)}
                     onSuccess={async () => {
                       const { data: { session: currentSession } } = await supabase.auth.getSession();
                       if (currentSession) {
@@ -443,7 +449,19 @@ const App: React.FC = () => {
                       }
                     }}
                   />
-
+                ) : view === 'signup' ? (
+                  <SignUpScreen
+                    onToggle={() => setView('signin')}
+                    onNavigate={(v) => setView(v)}
+                    onSuccess={async () => {
+                      const { data: { session: currentSession } } = await supabase.auth.getSession();
+                      if (currentSession) {
+                        setView(determineView(null, currentSession));
+                      } else {
+                        setView('signin');
+                      }
+                    }}
+                  />
                 ) : view === 'complete-profile' ? (
                   <CompleteProfile
                     role={selectedRole}

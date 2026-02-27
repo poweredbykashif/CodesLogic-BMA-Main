@@ -1,5 +1,5 @@
 -- ============================================
--- NOVA DESIGN SYSTEM - DATABASE SCHEMA
+-- CODESLOGIC - DATABASE SCHEMA
 -- ============================================
 -- This file contains the complete database schema
 -- Run this ONLY ONCE during initial setup

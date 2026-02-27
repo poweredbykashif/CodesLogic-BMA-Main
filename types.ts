@@ -2,11 +2,11 @@
 // Added missing React import to fix "Cannot find namespace 'React'" errors
 import React from 'react';
 
-// NOVA DESIGN SYSTEM - DESIGN LANGUAGE DEFINITIONS
+// CODESLOGIC - DESIGN LANGUAGE DEFINITIONS
 // 'metallic' variant adapts based on component context:
-// - "Nova Elevated": For surfaces, cards, and headers (Raised look, diagonal shine, outer shadow)
-// - "Nova Recessed": For inputs and dropdowns (Deep sunken/machined look, inner top shadow, bottom rim light)
-// - "Nova Metallic": For buttons and active states (Vibrant orange gradient, glowing, shine overlay)
+// - "CodesLogic Elevated": For surfaces, cards, and headers (Raised look, diagonal shine, outer shadow)
+// - "CodesLogic Recessed": For inputs and dropdowns (Deep sunken/machined look, inner top shadow, bottom rim light)
+// - "CodesLogic Metallic": For buttons and active states (Vibrant orange gradient, glowing, shine overlay)
 export type Variant = 'primary' | 'secondary' | 'outline' | 'ghost' | 'error' | 'success' | 'metallic' | 'recessed' | 'metallic-error';
 export type Size = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
 
@@ -94,6 +94,9 @@ export interface AvatarProps extends ComponentProps {
   size?: Size;
   status?: 'online' | 'offline' | 'busy' | 'away';
   disabled?: boolean;
+  loading?: boolean;
+  onLoad?: () => void;
+  onError?: (err: any) => void;
 }
 
 export interface KebabMenuOption {

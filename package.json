@@ -1,5 +1,5 @@
 {
-  "name": "nova-design-system",
+  "name": "codeslogic",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -9,7 +9,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.997.0",
     "@supabase/supabase-js": "^2.89.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
