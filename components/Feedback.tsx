@@ -34,8 +34,8 @@ export const Skeleton: React.FC<{ className?: string; variant?: 'rect' | 'circle
   };
 
   return (
-    <div className={`relative overflow-hidden bg-surface-overlay/60 ${variantStyles[variant]} ${className}`}>
-      <div className="absolute inset-0 -translate-x-full animate-[shimmer_2s_infinite] bg-gradient-to-r from-transparent via-white/[0.05] to-transparent" />
+    <div className={`relative overflow-hidden bg-white/[0.03] ${variantStyles[variant]} ${className}`}>
+      <div className="absolute inset-0 -translate-x-full animate-[shimmer_2.5s_infinite] bg-gradient-to-r from-transparent via-white/[0.05] to-transparent" />
     </div>
   );
 };
@@ -70,6 +70,7 @@ export const SectionLoader: React.FC<{ className?: string; label?: string }> = (
   );
 };
 
+
 /**
  * Pre-defined Skeletons for common UI patterns
  */
@@ -90,20 +91,31 @@ export const SkeletonCard: React.FC = () => (
   </div>
 );
 
-export const SkeletonTable: React.FC<{ rows?: number; className?: string }> = ({ rows = 4, className = "" }) => (
+export const SkeletonTable: React.FC<{ rows?: number; columns?: number; className?: string }> = ({ rows = 5, columns = 6, className = "" }) => (
   <div className={`w-full rounded-2xl border border-surface-border bg-surface-card overflow-hidden ${className}`}>
-    <div className="p-4 border-b border-surface-border flex gap-4">
-      {[1, 2, 3, 4].map(i => <Skeleton key={i} className="flex-1 h-4" />)}
+    {/* Skeleton Header */}
+    <div className="px-6 py-4 border-b border-surface-border flex gap-8 bg-surface-overlay/20">
+      {[...Array(columns)].map((_, i) => (
+        <Skeleton
+          key={i}
+          className={`h-2 opacity-50 ${i === 0 ? 'w-24' : i === columns - 1 ? 'w-16 ml-auto' : 'flex-1 max-w-[100px]'}`}
+        />
+      ))}
     </div>
-    <div className="divide-y divide-surface-border">
+    {/* Skeleton Body - row height matches actual table (py-[22px] + two bars = ~65px) */}
+    <div className="divide-y divide-surface-border/40">
       {[...Array(rows)].map((_, i) => (
-        <div key={i} className="p-4 flex gap-4">
-          <Skeleton className="w-10 h-10" variant="circle" />
-          <div className="flex-1 space-y-2">
-            <Skeleton className="w-1/3 h-4" />
-            <Skeleton className="w-1/4 h-3 opacity-50" />
-          </div>
-          <Skeleton className="w-24 h-6 self-center" />
+        <div key={i} className="px-6 py-[22px] flex items-center gap-8">
+          {[...Array(columns)].map((_, j) => (
+            <div
+              key={j}
+              className={`flex flex-col gap-1.5 ${j === 0 ? 'w-40' : j === columns - 1 ? 'w-12 ml-auto' : 'flex-1 max-w-[120px]'}`}
+            >
+              <Skeleton className={`h-2 opacity-20 w-full`} />
+              {/* Second bar on first 2 cols to simulate multi-line cell content */}
+              {j < 2 && <Skeleton className="h-[6px] opacity-10 w-3/5" />}
+            </div>
+          ))}
         </div>
       ))}
     </div>

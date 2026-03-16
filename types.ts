@@ -7,8 +7,8 @@ import React from 'react';
 // - "CodesLogic Elevated": For surfaces, cards, and headers (Raised look, diagonal shine, outer shadow)
 // - "CodesLogic Recessed": For inputs and dropdowns (Deep sunken/machined look, inner top shadow, bottom rim light)
 // - "CodesLogic Metallic": For buttons and active states (Vibrant orange gradient, glowing, shine overlay)
-export type Variant = 'primary' | 'secondary' | 'outline' | 'ghost' | 'error' | 'success' | 'metallic' | 'recessed' | 'metallic-error';
-export type Size = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
+export type Variant = 'primary' | 'secondary' | 'outline' | 'ghost' | 'error' | 'success' | 'metallic' | 'recessed' | 'metallic-error' | 'flat';
+export type Size = 'xs' | 'sm' | 'md' | 'lg' | 'xl' | '2xl' | 'none';
 
 export interface ComponentProps {
   className?: string;
@@ -32,6 +32,7 @@ export interface InputProps extends Omit<React.InputHTMLAttributes<HTMLInputElem
   rightIcon?: React.ReactNode;
   size?: Size;
   variant?: Variant;
+  inputClassName?: string;
 }
 
 export interface TableColumn<T> {
@@ -47,6 +48,7 @@ export interface TableProps<T> extends ComponentProps {
   onRowClick?: (item: T) => void;
   emptyMessage?: string;
   isLoading?: boolean;
+  skeletonCount?: number;
   isMetallicHeader?: boolean;
   disableRowHover?: boolean;
 }
@@ -54,8 +56,10 @@ export interface TableProps<T> extends ComponentProps {
 export interface DropdownOption {
   value: string;
   label: string;
+  labelClassName?: string;
   icon?: React.ReactNode;
   description?: string;
+  descriptionClassName?: string;
   disabled?: boolean;
 }
 
@@ -85,6 +89,7 @@ export interface TimeSelectProps extends ComponentProps {
   error?: string;
   isInline?: boolean;
   variant?: Variant;
+  applyLabel?: string;
 }
 
 export interface AvatarProps extends ComponentProps {
@@ -149,4 +154,5 @@ export interface ToastItem {
   title: string;
   message?: string;
   duration?: number;
+  silent?: boolean;
 }

@@ -14,6 +14,7 @@ import { formatDeadlineDate, formatTime, getTimeLeft, formatDisplayName } from '
 import { useUser } from '../contexts/UserContext';
 import { addToast } from '../components/Toast';
 import { getInitialTab, updateRoute } from '../utils/routing';
+import { getStatusCapsuleClasses } from '../components/Badge';
 
 interface Task {
     id: string;
@@ -269,7 +270,7 @@ const Tasks: React.FC = () => {
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
             {/* Header */}
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
+                <div className="flex flex-col md:flex-row items-stretch md:items-center gap-3 w-full md:w-auto">
                     {/* Date Filter */}
                     <div className="relative w-full md:w-[220px]">
                         <DatePicker
@@ -348,7 +349,7 @@ const Tasks: React.FC = () => {
                             setIsModalOpen(true);
                         }}
                         leftIcon={<IconPlus className="w-4 h-4" />}
-                        className="whitespace-nowrap"
+                        className="w-full md:w-auto whitespace-nowrap"
                     >
                         Create Task
                     </Button>
@@ -378,7 +379,7 @@ const Tasks: React.FC = () => {
                                 <p className={`text-xs font-bold uppercase tracking-widest mb-2 ${activeFilter === 'all' ? 'text-white/80' : 'text-gray-400'}`}>All Tasks</p>
                                 <p className={`text-2xl font-black mb-1 ${activeFilter === 'all' ? 'text-white' : 'text-brand-primary'}`}>{allTasksCount}</p>
                                 <div className="flex items-center gap-2 mt-1">
-                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase tracking-tighter ${activeFilter === 'all' ? 'bg-white/20 border-white/30 text-white' : 'bg-brand-primary/10 border-brand-primary/20 text-brand-primary'}`}>
+                                    <span className={activeFilter === 'all' ? 'inline-flex items-center px-3 py-1 rounded-md text-[10px] font-black uppercase tracking-wider bg-white/20 text-white' : getStatusCapsuleClasses('urgent')}>
                                         Total Tasks
                                     </span>
                                 </div>
@@ -414,7 +415,7 @@ const Tasks: React.FC = () => {
                                 <p className={`text-xs font-bold uppercase tracking-widest mb-2 ${activeFilter === 'progress' ? 'text-white/80' : 'text-gray-400'}`}>In Progress</p>
                                 <p className={`text-2xl font-black mb-1 ${activeFilter === 'progress' ? 'text-white' : 'text-brand-warning'}`}>{inProgressCount}</p>
                                 <div className="flex items-center gap-2 mt-1">
-                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase tracking-tighter ${activeFilter === 'progress' ? 'bg-white/20 border-white/30 text-white' : 'bg-brand-warning/10 border-brand-warning/20 text-brand-warning'}`}>
+                                    <span className={activeFilter === 'progress' ? 'inline-flex items-center px-3 py-1 rounded-md text-[10px] font-black uppercase tracking-wider bg-white/20 text-white' : getStatusCapsuleClasses('in progress')}>
                                         Active Tasks
                                     </span>
                                 </div>
@@ -450,7 +451,7 @@ const Tasks: React.FC = () => {
                                 <p className={`text-xs font-bold uppercase tracking-widest mb-2 ${activeFilter === 'completed' ? 'text-white/80' : 'text-gray-400'}`}>Completed</p>
                                 <p className={`text-2xl font-black mb-1 ${activeFilter === 'completed' ? 'text-white' : 'text-brand-success'}`}>{completedCount}</p>
                                 <div className="flex items-center gap-2 mt-1">
-                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase tracking-tighter ${activeFilter === 'completed' ? 'bg-white/20 border-white/30 text-white' : 'bg-brand-success/10 border-brand-success/20 text-brand-success'}`}>
+                                    <span className={activeFilter === 'completed' ? 'inline-flex items-center px-3 py-1 rounded-md text-[10px] font-black uppercase tracking-wider bg-white/20 text-white' : getStatusCapsuleClasses('approved')}>
                                         Done
                                     </span>
                                 </div>
@@ -504,17 +505,11 @@ const Tasks: React.FC = () => {
                         {
                             header: 'Status',
                             key: 'status',
-                            render: (task: Task) => {
-                                const isCompleted = task.status === 'Completed';
-                                return (
-                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase tracking-tighter ${isCompleted
-                                        ? 'bg-brand-success/10 border-brand-success/20 text-brand-success'
-                                        : 'bg-brand-warning/10 border-brand-warning/20 text-brand-warning'
-                                        }`}>
-                                        {task.status}
-                                    </span>
-                                );
-                            }
+                            render: (task: Task) => (
+                                <span className={getStatusCapsuleClasses(task.status)}>
+                                    {task.status}
+                                </span>
+                            )
                         },
                         {
                             header: 'Deadline',

@@ -13,6 +13,7 @@ export const TimeSelect: React.FC<TimeSelectProps & { children?: React.ReactNode
   isInline = false,
   variant = 'primary',
   className = "",
+  applyLabel = "Apply Deadline",
   children
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -152,19 +153,23 @@ export const TimeSelect: React.FC<TimeSelectProps & { children?: React.ReactNode
           setIsOpen(!isOpen);
         }
       }}
-      className={`w-full flex items-center justify-between transition-all duration-300 ease-out outline-none rounded-xl px-4 py-3 text-white disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer border relative overflow-hidden ${variant === 'metallic'
-        ? 'bg-black/40 border-white/[0.05] font-bold shadow-[inset_0_2px_8px_rgba(0,0,0,0.6)] focus:bg-black/60'
-        : `bg-surface-input border-2 focus:border-brand-primary ${error ? 'border-brand-error' : isOpen ? 'border-brand-primary' : 'border-surface-border'}`
+      className={`w-full flex items-center justify-between transition-all duration-300 ease-out outline-none rounded-xl px-4 py-3 text-white disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer relative overflow-hidden focus:outline-none focus:ring-0 ${variant === 'metallic'
+        ? 'bg-black/40 border-none font-bold shadow-[inset_0_2px_8px_rgba(0,0,0,0.6)] focus:bg-black/60'
+        : variant === 'recessed'
+          ? 'bg-black/40 border border-white/[0.05] shadow-[inset_0_2px_8px_rgba(0,0,0,0.4)] focus:border-white/[0.08] focus:bg-black/50'
+          : `bg-surface-input border-2 focus:border-brand-primary ${error ? 'border-brand-error' : isOpen ? 'border-brand-primary' : 'border-surface-border'}`
         }`}
     >
-      {variant === 'metallic' && (
-        <div className="absolute inset-0 pointer-events-none">
+      {(variant === 'metallic' || variant === 'recessed') && (
+        <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-xl">
           {/* Inner Top Shadow for carved-in look */}
-          <div className="absolute top-0 left-0 right-0 h-4 bg-gradient-to-b from-black/60 to-transparent" />
+          <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-b from-black/60 to-transparent" />
           {/* Subtle Diagonal Machined Sheen */}
-          <div className="absolute inset-0 bg-[linear-gradient(135deg,transparent_0%,rgba(255,255,255,0.02)_48%,rgba(255,255,255,0.05)_50%,rgba(255,255,255,0.02)_52%,transparent_100%)] opacity-40" />
-          {/* Bottom Rim Light */}
-          <div className="absolute bottom-0 left-0 right-0 h-[1px] bg-white/[0.06] shadow-[0_-1px_2px_rgba(255,255,255,0.05)]" />
+          <div className="absolute inset-0 bg-[linear-gradient(135deg,transparent_0%,rgba(255,255,255,0.02)_48%,rgba(255,255,255,0.05)_50%,rgba(255,255,255,0.02)_52%,transparent_100%)] opacity-30" />
+          {/* Bottom Rim Light (For depth) */}
+          {variant === 'metallic' && (
+            <div className="absolute bottom-0 left-0 right-0 h-[1px] bg-white/[0.06] shadow-[0_-1px_2px_rgba(255,255,255,0.05)]" />
+          )}
         </div>
       )}
       <div className="flex items-center gap-2 overflow-hidden">
@@ -177,14 +182,6 @@ export const TimeSelect: React.FC<TimeSelectProps & { children?: React.ReactNode
           </span>
         )}
       </div>
-      <svg
-        className={`w-4 h-4 text-gray-600 transition-transform duration-300 ease-out ${isOpen ? 'rotate-180 text-brand-primary' : ''}`}
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-      >
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
-      </svg>
     </button>
   );
 
@@ -282,7 +279,7 @@ export const TimeSelect: React.FC<TimeSelectProps & { children?: React.ReactNode
             className="w-full py-2.5 bg-gradient-to-b from-[#FF6B4B] to-[#D9361A] text-white text-[11px] font-bold rounded-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_8px_16px_-4px_rgba(255,77,45,0.4)] transition-all hover:brightness-[1.05] active:brightness-[0.95] active:scale-[0.98] uppercase tracking-widest relative overflow-hidden outline-none focus:ring-0 ring-0"
           >
             <div className="absolute inset-0 bg-[linear-gradient(135deg,transparent_0%,rgba(255,255,255,0.15)_50%,transparent_100%)] pointer-events-none opacity-50" />
-            <span className="relative z-10">Apply Deadline</span>
+            <span className="relative z-10">{applyLabel}</span>
           </button>
         </div>
       )}

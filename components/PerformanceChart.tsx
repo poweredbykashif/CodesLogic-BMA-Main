@@ -170,29 +170,31 @@ const PerformanceChart: React.FC<PerformanceChartProps> = ({ data, isLoading }) 
     const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
 
-    // Calculate chart limits
-    const maxVal = useMemo(() => {
-        if (chartData.length === 0) return 10; // Default for empty data
+    // Calculate chart limits with Dual Axis support for Performance tab
+    const primaryMaxVal = useMemo(() => {
+        if (chartData.length === 0) return 10;
+        if (activeTab === 'conversion') {
+            const max = chartData.reduce((currMax, d) => Math.max(currMax, d.conversionRate, d.clickThroughRate), 0);
+            return max === 0 ? 100 : Math.ceil(max / 5) * 5 || 5;
+        }
+        // Performance Tab Primary Axis: Impressions
+        const max = chartData.reduce((currMax, d) => Math.max(currMax, visibleMetrics.impressions ? d.impressions : 0), 0);
+        const raw = max * 1.1;
+        // Round to a nice multiple to avoid messy decimals on left axis (e.g., multiples of 5, 50, 500)
+        const magnitude = Math.pow(10, Math.floor(Math.log10(raw || 1)) - 1) || 1;
+        return Math.ceil(raw / (5 * magnitude)) * (5 * magnitude) || 1000;
+    }, [visibleMetrics, activeTab, chartData]);
 
-        const max = chartData.reduce((currMax, d) => {
-            let dMax = 0;
-            if (activeTab === 'performance') {
-                dMax = Math.max(
-                    visibleMetrics.impressions ? d.impressions : 0,
-                    visibleMetrics.clicks ? d.clicks : 0,
-                    visibleMetrics.orders ? d.orders : 0
-                );
-            } else { // activeTab === 'conversion'
-                dMax = Math.max(
-                    visibleMetrics.conversionRate ? d.conversionRate : 0,
-                    visibleMetrics.clickThroughRate ? d.clickThroughRate : 0
-                );
-            }
-            return Math.max(currMax, dMax);
-        }, 0);
-
-        if (max === 0) return activeTab === 'conversion' ? 100 : 10;
-        return max * 1.1; // Add 10% padding
+    const secondaryMaxVal = useMemo(() => {
+        if (chartData.length === 0 || activeTab === 'conversion') return 10;
+        // Performance Tab Secondary Axis: Clicks & Orders (Rounded to 5 intervals)
+        const max = chartData.reduce((currMax, d) => Math.max(
+            currMax,
+            visibleMetrics.clicks ? d.clicks : 0,
+            visibleMetrics.orders ? d.orders : 0
+        ), 0);
+        const targetMax = Math.max(5, max);
+        return Math.ceil(targetMax / 5) * 5;
     }, [visibleMetrics, activeTab, chartData]);
 
     const toggleMetric = (metric: keyof typeof visibleMetrics) => {
@@ -246,8 +248,9 @@ const PerformanceChart: React.FC<PerformanceChartProps> = ({ data, isLoading }) 
         setHoveredIndex(null);
     };
 
-    // Y-Axis Ticks
-    const yTicks = [0, 0.25, 0.5, 0.75, 1].map(r => r * maxVal);
+    // Y-Axis Ticks - Using 5 intervals (6 labels) for round integer steps
+    const primaryTicks = [0, 0.2, 0.4, 0.6, 0.8, 1].map(r => r * primaryMaxVal);
+    const secondaryTicks = [0, 0.2, 0.4, 0.6, 0.8, 1].map(r => Math.round(r * secondaryMaxVal));
 
     if (isLoading) {
         return <SkeletonChart />;
@@ -266,14 +269,17 @@ const PerformanceChart: React.FC<PerformanceChartProps> = ({ data, isLoading }) 
 
             <div className="relative z-10 w-full">
                 {/* Header Section */}
-                <div className="flex flex-col xl:flex-row items-center justify-between gap-6 w-full p-6 sm:px-8 sm:py-6 border-b border-white/5">
+                <div className="flex flex-col xl:flex-row items-center justify-between gap-6 w-full p-4 sm:p-6 lg:px-8 lg:py-6 border-b border-white/5">
                     {/* Title & Filters */}
-                    <div className="flex flex-col lg:flex-row items-center gap-6 w-full xl:w-auto">
-                        <h3 className="text-lg font-bold text-white whitespace-nowrap">Performance</h3>
+                    <div className="flex flex-col lg:flex-row items-center gap-4 sm:gap-6 w-full xl:w-auto">
+                        <div className="flex items-center justify-between w-full lg:w-auto">
+                            <h3 className="text-base sm:text-lg font-bold text-white whitespace-nowrap">Performance</h3>
+                            <div className="lg:hidden h-px flex-1 bg-white/10 mx-4" />
+                        </div>
 
                         <div className="hidden lg:block h-6 w-px bg-white/10" />
 
-                        <div className="flex flex-wrap items-center justify-center lg:justify-start gap-4 sm:gap-6 w-full lg:w-auto">
+                        <div className="flex flex-wrap items-center justify-center lg:justify-start gap-x-4 gap-y-3 sm:gap-6 w-full lg:w-auto">
                             {/* All Checkbox */}
                             <label className="flex items-center gap-2 cursor-pointer group">
                                 <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${isAllVisible ? 'bg-gray-600 border-gray-600' : 'border-gray-600 group-hover:border-gray-400'}`}>
@@ -380,19 +386,19 @@ const PerformanceChart: React.FC<PerformanceChartProps> = ({ data, isLoading }) 
                 </div>
 
                 {/* Content Area */}
-                <div className="p-6 sm:p-8 space-y-6 sm:pb-[88px]">
+                <div className="p-4 sm:p-6 lg:p-8 space-y-6 sm:pb-[88px]">
                     {/* Metric Filters Row */}
 
 
-                    {/* Chart Layout: Y-Axis + Graph */}
-                    <div className="flex w-full mt-6 h-[300px]">
-                        {/* Y-Axis Labels */}
-                        <div className="w-[72px] relative pr-8 text-xs font-semibold text-white/90 h-full">
-                            {yTicks.slice().reverse().map((tick, i) => (
+                    {/* Chart Layout: Y-Axes + Graph */}
+                    <div className="flex w-full mt-6 h-[250px] sm:h-[300px] px-0 sm:px-2">
+                        {/* Primary Y-Axis Labels (Left) */}
+                        <div className="w-[44px] sm:w-[60px] relative text-[10px] sm:text-xs font-semibold text-white/90 h-full">
+                            {primaryTicks.slice().reverse().map((tick, i) => (
                                 <span
                                     key={i}
-                                    className="absolute right-8 transform -translate-y-1/2"
-                                    style={{ top: `${(i / (yTicks.length - 1)) * 100}%` }}
+                                    className="absolute right-2 sm:right-4 transform -translate-y-1/2"
+                                    style={{ top: `${(i / (primaryTicks.length - 1)) * 100}%` }}
                                 >
                                     {activeTab === 'conversion'
                                         ? (tick < 10 ? `${tick.toFixed(1)}%` : `${Math.round(tick)}%`)
@@ -402,27 +408,25 @@ const PerformanceChart: React.FC<PerformanceChartProps> = ({ data, isLoading }) 
                         </div>
 
                         {/* Chart Area */}
-                        <div className="flex-1 relative h-full pr-8">
+                        <div className="flex-1 relative h-full">
                             <div
-                                className="w-full h-full relative group cursor-crosshair"
+                                className="w-full h-full relative group cursor-crosshair px-2"
                                 ref={containerRef}
                                 onMouseMove={handleMouseMove}
                                 onMouseLeave={handleMouseLeave}
                             >
                                 <svg className="w-full h-full overflow-visible" viewBox="0 0 1000 300" preserveAspectRatio="none">
-                                    {/* Grid Lines */}
-                                    <line x1="0" y1="0" x2="1000" y2="0" stroke="rgba(255,255,255,0.1)" strokeDasharray="4 4" />
-                                    <line x1="0" y1="75" x2="1000" y2="75" stroke="rgba(255,255,255,0.1)" strokeDasharray="4 4" />
-                                    <line x1="0" y1="150" x2="1000" y2="150" stroke="rgba(255,255,255,0.1)" strokeDasharray="4 4" />
-                                    <line x1="0" y1="225" x2="1000" y2="225" stroke="rgba(255,255,255,0.1)" strokeDasharray="4 4" />
-                                    <line x1="0" y1="300" x2="1000" y2="300" stroke="rgba(255,255,255,0.1)" strokeDasharray="4 4" />
+                                    {/* Grid Lines - sync with 5 intervals */}
+                                    {[0, 60, 120, 180, 240, 300].map(y => (
+                                        <line key={y} x1="0" y1={y} x2="1000" y2={y} stroke="rgba(255,255,255,0.1)" strokeDasharray="4 4" />
+                                    ))}
 
                                     {/* Chart Lines */}
                                     {activeTab === 'performance' ? (
                                         <>
                                             {visibleMetrics.impressions && (
                                                 <path
-                                                    d={getPath(chartData, 'impressions', 1000, 300, maxVal)}
+                                                    d={getPath(chartData, 'impressions', 1000, 300, primaryMaxVal)}
                                                     fill="none"
                                                     stroke="#FF4D2D"
                                                     strokeWidth="2"
@@ -432,7 +436,7 @@ const PerformanceChart: React.FC<PerformanceChartProps> = ({ data, isLoading }) 
                                             )}
                                             {visibleMetrics.clicks && (
                                                 <path
-                                                    d={getPath(chartData, 'clicks', 1000, 300, maxVal)}
+                                                    d={getPath(chartData, 'clicks', 1000, 300, secondaryMaxVal)}
                                                     fill="none"
                                                     stroke="#40C4FF"
                                                     strokeWidth="2"
@@ -442,7 +446,7 @@ const PerformanceChart: React.FC<PerformanceChartProps> = ({ data, isLoading }) 
                                             )}
                                             {visibleMetrics.orders && (
                                                 <path
-                                                    d={getPath(chartData, 'orders', 1000, 300, maxVal)}
+                                                    d={getPath(chartData, 'orders', 1000, 300, secondaryMaxVal)}
                                                     fill="none"
                                                     stroke="#1DBF73"
                                                     strokeWidth="2"
@@ -455,7 +459,7 @@ const PerformanceChart: React.FC<PerformanceChartProps> = ({ data, isLoading }) 
                                         <>
                                             {visibleMetrics.conversionRate && (
                                                 <path
-                                                    d={getPath(chartData, 'conversionRate', 1000, 300, maxVal)}
+                                                    d={getPath(chartData, 'conversionRate', 1000, 300, primaryMaxVal)}
                                                     fill="none"
                                                     stroke="#A855F7"
                                                     strokeWidth="2"
@@ -465,7 +469,7 @@ const PerformanceChart: React.FC<PerformanceChartProps> = ({ data, isLoading }) 
                                             )}
                                             {visibleMetrics.clickThroughRate && (
                                                 <path
-                                                    d={getPath(chartData, 'clickThroughRate', 1000, 300, maxVal)}
+                                                    d={getPath(chartData, 'clickThroughRate', 1000, 300, primaryMaxVal)}
                                                     fill="none"
                                                     stroke="#EAB308"
                                                     strokeWidth="2"
@@ -505,7 +509,7 @@ const PerformanceChart: React.FC<PerformanceChartProps> = ({ data, isLoading }) 
                                                         className="absolute w-3 h-3 bg-[#FF4D2D] rounded-full border-2 border-white shadow-sm transform -translate-x-1/2 -translate-y-1/2 pointer-events-none"
                                                         style={{
                                                             left: `${(hoveredIndex / (chartData.length - 1)) * 100}%`,
-                                                            top: `${(1 - chartData[hoveredIndex].impressions / maxVal) * 100}%`
+                                                            top: `${(1 - chartData[hoveredIndex].impressions / primaryMaxVal) * 100}%`
                                                         }}
                                                     />
                                                 )}
@@ -514,7 +518,7 @@ const PerformanceChart: React.FC<PerformanceChartProps> = ({ data, isLoading }) 
                                                         className="absolute w-3 h-3 bg-[#40C4FF] rounded-full border-2 border-white shadow-sm transform -translate-x-1/2 -translate-y-1/2 pointer-events-none"
                                                         style={{
                                                             left: `${(hoveredIndex / (chartData.length - 1)) * 100}%`,
-                                                            top: `${(1 - chartData[hoveredIndex].clicks / maxVal) * 100}%`
+                                                            top: `${(1 - chartData[hoveredIndex].clicks / secondaryMaxVal) * 100}%`
                                                         }}
                                                     />
                                                 )}
@@ -523,7 +527,7 @@ const PerformanceChart: React.FC<PerformanceChartProps> = ({ data, isLoading }) 
                                                         className="absolute w-3 h-3 bg-[#1DBF73] rounded-full border-2 border-white shadow-sm transform -translate-x-1/2 -translate-y-1/2 pointer-events-none"
                                                         style={{
                                                             left: `${(hoveredIndex / (chartData.length - 1)) * 100}%`,
-                                                            top: `${(1 - chartData[hoveredIndex].orders / maxVal) * 100}%`
+                                                            top: `${(1 - chartData[hoveredIndex].orders / secondaryMaxVal) * 100}%`
                                                         }}
                                                     />
                                                 )}
@@ -535,7 +539,7 @@ const PerformanceChart: React.FC<PerformanceChartProps> = ({ data, isLoading }) 
                                                         className="absolute w-3 h-3 bg-[#A855F7] rounded-full border-2 border-white shadow-sm transform -translate-x-1/2 -translate-y-1/2 pointer-events-none"
                                                         style={{
                                                             left: `${(hoveredIndex / (chartData.length - 1)) * 100}%`,
-                                                            top: `${(1 - chartData[hoveredIndex].conversionRate / maxVal) * 100}%`
+                                                            top: `${(1 - chartData[hoveredIndex].conversionRate / primaryMaxVal) * 100}%`
                                                         }}
                                                     />
                                                 )}
@@ -544,7 +548,7 @@ const PerformanceChart: React.FC<PerformanceChartProps> = ({ data, isLoading }) 
                                                         className="absolute w-3 h-3 bg-[#EAB308] rounded-full border-2 border-white shadow-sm transform -translate-x-1/2 -translate-y-1/2 pointer-events-none"
                                                         style={{
                                                             left: `${(hoveredIndex / (chartData.length - 1)) * 100}%`,
-                                                            top: `${(1 - chartData[hoveredIndex].clickThroughRate / maxVal) * 100}%`
+                                                            top: `${(1 - chartData[hoveredIndex].clickThroughRate / primaryMaxVal) * 100}%`
                                                         }}
                                                     />
                                                 )}
@@ -566,8 +570,11 @@ const PerformanceChart: React.FC<PerformanceChartProps> = ({ data, isLoading }) 
                                         if (visibleMetrics.clickThroughRate) val = Math.max(val, point.clickThroughRate);
                                     }
 
-                                    const yPercent = maxVal ? (1 - val / maxVal) * 100 : 0;
-                                    const isHigh = val / maxVal > 0.6; // Top 40%
+                                    const yPercent = activeTab === 'performance'
+                                        ? (visibleMetrics.impressions ? (1 - point.impressions / primaryMaxVal) * 100 : (1 - val / secondaryMaxVal) * 100)
+                                        : (1 - val / primaryMaxVal) * 100;
+
+                                    const isHigh = yPercent < 40;
 
                                     // Horizontal alignment logic
                                     const xPercent = hoveredIndex / (chartData.length - 1);
@@ -641,9 +648,9 @@ const PerformanceChart: React.FC<PerformanceChartProps> = ({ data, isLoading }) 
                                 })()}
 
                                 {/* X-Axis Labels (Absolute Positioning) */}
-                                <div className="absolute top-full w-full mt-8 h-6 left-0">
+                                <div className="absolute top-full w-full mt-6 sm:mt-8 h-6 left-0">
                                     {chartData.map((point, i) => {
-                                        const step = Math.max(1, Math.ceil(chartData.length / 10));
+                                        const step = Math.max(1, Math.ceil(chartData.length / (window.innerWidth < 640 ? 5 : 10)));
                                         if (i % step !== 0) return null;
 
                                         const xPercent = i / (chartData.length - 1);
@@ -663,6 +670,22 @@ const PerformanceChart: React.FC<PerformanceChartProps> = ({ data, isLoading }) 
                                 </div>
                             </div>
                         </div>
+
+                        {/* Secondary Y-Axis Labels (Right) - Only for Performance Tab */}
+                        {activeTab === 'performance' && (
+                            <div className="w-[44px] sm:w-[60px] relative text-[10px] sm:text-xs font-semibold text-white/90 h-full pl-2 sm:pl-4">
+                                {secondaryTicks.slice().reverse().map((tick, i) => (
+                                    <span
+                                        key={i}
+                                        className="absolute left-2 sm:left-4 transform -translate-y-1/2 flex items-center gap-1 sm:gap-1.5"
+                                        style={{ top: `${(i / (secondaryTicks.length - 1)) * 100}%` }}
+                                    >
+                                        <div className="w-1 sm:w-1.5 h-1 sm:h-1.5 rounded-full bg-[#1DBF73]/50" />
+                                        {formatNumber(tick)}
+                                    </span>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>

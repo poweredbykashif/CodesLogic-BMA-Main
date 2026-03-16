@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Avatar } from '../components/Avatar';
 import { Tabs } from '../components/Navigation';
 import { Calendar } from '../components/Calendar';
@@ -9,11 +9,12 @@ import { Input, TextArea } from '../components/Input';
 import { DatePicker, formatDate as systemFormatDate } from '../components/DatePicker';
 import { Dropdown } from '../components/Dropdown';
 import { UploadPreview } from '../components/UploadPreview';
-import { IconCreditCard, IconChartBar, IconUser, IconSettings, IconPlus, IconTrash, IconEdit, IconCalendar, IconFilter, IconCloudUpload, IconClock, IconCheckCircle, IconLayout, IconDownload, IconBuilding, IconDollar, IconTrendingUp, IconX, IconChevronRight, IconLock } from '../components/Icons';
+import { IconCreditCard, IconChartBar, IconUser, IconSettings, IconPlus, IconTrash, IconEdit, IconCalendar, IconFilter, IconCloudUpload, IconClock, IconCheckCircle, IconLayout, IconDownload, IconBuilding, IconDollar, IconTrendingUp, IconX, IconChevronRight, IconLock, IconRefreshCw } from '../components/Icons';
 import { supabase } from '../lib/supabase';
 import { addToast } from '../components/Toast';
 import { KebabMenu } from '../components/KebabMenu';
-import { Switch } from '../components/Selection';
+import { Checkbox, Switch } from '../components/Selection';
+import { Badge, getRoleCapsuleClasses, getAccountCapsuleClasses, getStatusCapsuleClasses } from '../components/Badge';
 import { getInitialTab, updateRoute } from '../utils/routing';
 import { useAccounts } from '../contexts/AccountContext';
 import { useUser } from '../contexts/UserContext';
@@ -276,19 +277,19 @@ const PlatformCommission: React.FC = () => {
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
             <div className="space-y-4">
-                <div className="flex items-center justify-between px-2">
+                <div className="flex flex-col sm:flex-row items-center justify-between px-2 gap-4">
                     <h3 className="text-sm font-bold text-white uppercase tracking-wider">Recent Commission Logs</h3>
                     <Button
                         variant="metallic"
                         size="sm"
                         leftIcon={<IconPlus className="w-4 h-4" />}
                         onClick={() => setIsModalOpen(true)}
+                        className="w-full sm:w-auto"
                     >
                         Add Commission
                     </Button>
                 </div>
                 <Table
-                    isLoading={loading}
                     isMetallicHeader={true}
                     columns={[
                         {
@@ -331,7 +332,7 @@ const PlatformCommission: React.FC = () => {
                                     {item.assigned_account_ids?.map((id: string) => {
                                         const account = (accounts || []).find(a => a.id === id);
                                         return (
-                                            <span key={id} className="px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-[10px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap">
+                                            <span key={id} className="px-3 py-1 rounded-md bg-gray-600/20 text-[10px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap">
                                                 {account?.name || 'Unknown'}
                                             </span>
                                         );
@@ -522,128 +523,471 @@ const PlatformCommission: React.FC = () => {
     );
 };
 
-const SellerCommission: React.FC = () => {
+const SellerCommissionConfigs: React.FC = () => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [submitting, setSubmitting] = useState(false);
     const [commissions, setCommissions] = useState<any[]>([]);
+    const [users, setUsers] = useState<any[]>([]);
+    const { accounts } = useAccounts();
+    const deduplicatedAccounts = useMemo(() => {
+        if (!accounts) return [];
+        
+        // Group by prefix (case-insensitive)
+        const groups = accounts.reduce((acc, curr) => {
+            const key = (curr.prefix || curr.name || '').toLowerCase().trim();
+            if (!key) return acc;
+            
+            if (!acc[key]) acc[key] = [];
+            acc[key].push(curr);
+            return acc;
+        }, {} as Record<string, any[]>);
+        
+        return Object.values(groups).map(group => {
+            // Prefer the account with the longest name (likely the full name)
+            return [...group].sort((a, b) => (b.name || '').length - (a.name || '').length)[0];
+        });
+    }, [accounts]);
 
-    const handleCloseModal = () => {
+    const [formData, setFormData] = useState({
+        sellerId: '',
+        percentage: '',
+        clearanceDays: '14',
+        assignedAccountIds: [] as string[]
+    });
+
+    useEffect(() => {
+        fetchCommissions();
+        fetchUsers();
+    }, []);
+
+    const fetchUsers = async () => {
+        const { data } = await supabase.from('profiles').select('id, name, email, role');
+        if (data) {
+            setUsers(data.filter((u: any) => u.role !== 'Freelancer'));
+        }
+    };
+
+    const fetchCommissions = async () => {
+        setLoading(true);
+        const { data, error } = await supabase
+            .from('seller_commissions')
+            .select(`
+                id,
+                seller_id,
+                commission_percentage,
+                clearance_days,
+                logo_url,
+                seller_commission_accounts (
+                    account_id
+                ),
+                profiles (
+                    name,
+                    email
+                )
+            `);
+        if (data) {
+            setCommissions(data.map(item => ({
+                ...item,
+                assigned_account_ids: item.seller_commission_accounts?.map((r: any) => r.account_id) || []
+            })));
+        }
+        setLoading(false);
+    };
+
+    const handleSave = async () => {
+        if (!formData.sellerId || !formData.percentage) {
+            addToast({ type: 'error', title: 'Missing Fields', message: 'Seller and Commission % are required.' });
+            return;
+        }
+        setSubmitting(true);
+        const factor = parseFloat(formData.percentage) / 100;
+        const payload = {
+            seller_id: formData.sellerId,
+            commission_percentage: factor,
+            clearance_days: parseInt(formData.clearanceDays || '14')
+        };
+        
+        const { data, error } = await supabase.from('seller_commissions').insert([payload]).select().single();
+        if (error) {
+            addToast({ type: 'error', title: 'Save Failed', message: error.message });
+            setSubmitting(false);
+            return;
+        }
+
+        if (data && formData.assignedAccountIds.length > 0) {
+            const accPayload = formData.assignedAccountIds.map(accId => ({
+                seller_commission_id: data.id,
+                account_id: accId
+            }));
+            await supabase.from('seller_commission_accounts').insert(accPayload);
+        }
+        
+        addToast({ type: 'success', title: 'Saved', message: 'Seller commission saved' });
         setIsModalOpen(false);
+        setFormData({ sellerId: '', percentage: '', clearanceDays: '14', assignedAccountIds: [] });
+        fetchCommissions();
+        setSubmitting(false);
     };
 
     return (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
-            <div className="space-y-4">
-                <div className="flex items-center justify-between px-2">
-                    <h3 className="text-sm font-bold text-white uppercase tracking-wider">Seller Commission Logs</h3>
-                    <Button
-                        variant="metallic"
-                        size="sm"
-                        leftIcon={<IconPlus className="w-4 h-4" />}
-                        onClick={() => setIsModalOpen(true)}
-                    >
-                        Add Seller Commission
-                    </Button>
-                </div>
-                <Table
-                    isLoading={loading}
-                    isMetallicHeader={true}
-                    columns={[
-                        {
-                            header: 'Seller',
-                            key: 'seller_name',
-                            className: 'w-80',
-                            render: (item: any) => (
-                                <div className="flex items-center gap-3">
-                                    <Avatar
-                                        src={item.logo_url}
-                                        initials={item.seller_name?.charAt(0)}
-                                        size="sm"
-                                    />
-                                    <span className="font-semibold text-white/90">{item.seller_name}</span>
-                                </div>
-                            )
-                        },
-                        {
-                            header: 'Commission %',
-                            key: 'percentage',
-                            className: 'w-40',
-                            render: (item: any) => (
-                                <span className="text-brand-primary font-bold">{item.commission_percentage || 0}%</span>
-                            )
-                        },
-                        {
-                            header: 'Clearance Days',
-                            key: 'clearance_days',
-                            className: 'w-44',
-                            render: (item: any) => (
-                                <span className="text-gray-400">{item.clearance_days || 0} Days</span>
-                            )
-                        },
-                        {
-                            header: 'Accounts',
-                            key: 'assigned_account_ids',
-                            className: 'min-w-[272px]',
-                            render: (item: any) => (
-                                <div className="flex flex-wrap gap-1.5">
-                                    {item.assigned_account_ids?.map((id: string) => (
-                                        <span key={id} className="px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-[10px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap">
-                                            {id}
-                                        </span>
-                                    ))}
-                                    {(!item.assigned_account_ids || item.assigned_account_ids.length === 0) && (
-                                        <span className="text-xs text-gray-600 italic">None</span>
-                                    )}
-                                </div>
-                            )
-                        },
-                        {
-                            header: '',
-                            key: 'actions',
-                            className: 'w-20 text-right',
-                            render: (item: any) => (
-                                <KebabMenu
-                                    options={[
-                                        { label: 'Edit', icon: <IconEdit className="w-4 h-4" />, onClick: () => { } },
-                                        { label: 'Delete', icon: <IconTrash className="w-4 h-4" />, variant: 'danger', onClick: () => { } }
-                                    ]}
-                                />
-                            )
-                        }
-                    ]}
-                    data={commissions}
-                    isLoading={loading}
-                />
+        <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex flex-col sm:flex-row items-center justify-between px-2 gap-4">
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">Seller Commission Logs</h3>
+                <Button
+                    variant="metallic"
+                    size="sm"
+                    leftIcon={<IconPlus className="w-4 h-4" />}
+                    onClick={() => setIsModalOpen(true)}
+                    className="w-full sm:w-auto"
+                >
+                    Add Seller Commission
+                </Button>
             </div>
+            <Table
+                isLoading={loading}
+                isMetallicHeader={true}
+                emptyMessage="No seller commissions saved yet."
+                columns={[
+                    {
+                        header: 'Seller',
+                        key: 'seller_id',
+                        className: 'w-80',
+                        render: (item: any) => (
+                            <div className="flex items-center gap-3">
+                                <Avatar
+                                    src={item.logo_url}
+                                    initials={(Array.isArray(item.profiles) ? item.profiles[0]?.name : (item.profiles as any)?.name)?.charAt(0) || '?'}
+                                    size="sm"
+                                />
+                                <span className="font-semibold text-white/90">{(Array.isArray(item.profiles) ? item.profiles[0]?.name : (item.profiles as any)?.name) || 'Unknown User'}</span>
+                            </div>
+                        )
+                    },
+                    {
+                        header: 'Commission %',
+                        key: 'percentage',
+                        className: 'w-40',
+                        render: (item: any) => (
+                            <span className="text-brand-primary font-bold">{item.commission_percentage ? (item.commission_percentage * 100).toFixed(1) : 0}%</span>
+                        )
+                    },
+                    {
+                        header: 'Clearance Days',
+                        key: 'clearance_days',
+                        className: 'w-44',
+                        render: (item: any) => (
+                            <span className="text-gray-400">{item.clearance_days || 0} Days</span>
+                        )
+                    },
+                    {
+                        header: 'Accounts',
+                        key: 'assigned_account_ids',
+                        className: 'min-w-[272px]',
+                        render: (item: any) => (
+                            <div className="flex flex-wrap gap-1.5">
+                                {item.assigned_account_ids?.map((id: string) => {
+                                    const accLabel = accounts?.find(a => a.id === id)?.prefix || id;
+                                    return (
+                                        <span key={id} className={getAccountCapsuleClasses()}>
+                                            {accLabel}
+                                        </span>
+                                    );
+                                })}
+                                {(!item.assigned_account_ids || item.assigned_account_ids.length === 0) && (
+                                    <span className="text-xs text-gray-600 italic">None</span>
+                                )}
+                            </div>
+                        )
+                    },
+                    {
+                        header: '',
+                        key: 'actions',
+                        className: 'w-20 text-right',
+                        render: (item: any) => (
+                            <KebabMenu
+                                options={[
+                                    { label: 'Edit', icon: <IconEdit className="w-4 h-4" />, onClick: () => { } },
+                                    { label: 'Delete', icon: <IconTrash className="w-4 h-4" />, variant: 'danger', onClick: async () => {
+                                        await supabase.from('seller_commissions').delete().eq('id', item.id);
+                                        fetchCommissions();
+                                    }}
+                                ]}
+                            />
+                        )
+                    }
+                ]}
+                data={commissions}
+            />
 
             <Modal
                 isOpen={isModalOpen}
-                onClose={handleCloseModal}
+                onClose={() => setIsModalOpen(false)}
                 title="Add Seller Commission"
                 size="md"
                 isElevatedFooter={true}
                 footer={(
                     <div className="flex justify-end gap-3">
-                        <Button variant="recessed" onClick={handleCloseModal}>Cancel</Button>
-                        <Button variant="metallic">Save Commission</Button>
+                        <Button variant="recessed" onClick={() => setIsModalOpen(false)}>Cancel</Button>
+                        <Button variant="metallic" onClick={handleSave} isLoading={submitting}>Save Commission</Button>
                     </div>
                 )}
             >
                 <div className="space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <Input
+                        <Dropdown
                             variant="metallic"
-                            label="Seller Name"
-                            placeholder="Enter seller name"
+                            label="Select Seller"
+                            placeholder="Select a seller"
+                            showSearch
+                            menuClassName="min-w-[400px] w-max"
+                            options={users.map(u => {
+                                return {
+                                    label: u.name,
+                                    value: u.id,
+                                    labelClassName: 'whitespace-nowrap shrink-0',
+                                    description: u.role || 'User',
+                                    descriptionClassName: getRoleCapsuleClasses(u.role)
+                                };
+                            })}
+                            value={formData.sellerId}
+                            onChange={(val) => setFormData({ ...formData, sellerId: val as string })}
                         />
                         <Input
                             variant="metallic"
                             label="Commission Percentage"
                             placeholder="Enter percentage (0-100)"
+                            type="number"
+                            value={formData.percentage}
+                            onChange={(e) => setFormData({ ...formData, percentage: e.target.value })}
                         />
                     </div>
+                    <Input
+                        variant="metallic"
+                        label="Clearance Days"
+                        placeholder="14"
+                        type="number"
+                        value={formData.clearanceDays}
+                        onChange={(e) => setFormData({ ...formData, clearanceDays: e.target.value })}
+                    />
+                    <Dropdown
+                        variant="metallic"
+                        isMulti
+                        showSearch
+                        label="Assign to accounts"
+                        placeholder="Select accounts"
+                        options={deduplicatedAccounts.map(acc => ({
+                            label: acc.name,
+                            value: acc.id,
+                            description: acc.prefix,
+                            descriptionClassName: getAccountCapsuleClasses()
+                        }))}
+                        value={formData.assignedAccountIds}
+                        onChange={(val) => setFormData(prev => ({ ...prev, assignedAccountIds: val }))}
+                    />
                 </div>
             </Modal>
+        </div>
+    );
+};
+
+const SellerEarnings: React.FC = () => {
+    const [transactions, setTransactions] = useState<any[]>([]);
+    const [loading, setLoading] = useState(false);
+    const { accounts } = useAccounts();
+
+    useEffect(() => {
+        loadEarnings();
+    }, []);
+
+    const loadEarnings = async () => {
+        setLoading(true);
+        try {
+            const [projRes, sellRes, platRes, slabRes] = await Promise.all([
+                supabase.from('projects')
+                    .select('*, primary_manager:primary_manager_id(name), accounts(prefix)')
+                    .in('status', ['Approved', 'Done', 'Completed', 'Sent For Approval']),
+                supabase.from('seller_commissions')
+                    .select('id, seller_id, commission_percentage, clearance_days, seller_commission_accounts(account_id), profiles(name)'),
+                supabase.from('platform_commissions')
+                    .select('*, platform_commission_accounts(account_id)'),
+                supabase.from('pricing_slabs')
+                    .select('*')
+            ]);
+
+            const projects = projRes.data || [];
+            const sellerComms = (sellRes.data || []).map(s => ({
+                ...s,
+                assigned_account_ids: s.seller_commission_accounts?.map((a: any) => a.account_id) || []
+            }));
+            const platformComms = (platRes.data || []).map(p => ({
+                ...p,
+                assigned_account_ids: p.platform_commission_accounts?.map((a: any) => a.account_id) || []
+            }));
+            const slabs = slabRes.data || [];
+
+            const enriched = projects.map(p => {
+                const price = Number(p.price || 0);
+
+                // Platform Math
+                const pComm = platformComms.find(pc => pc.assigned_account_ids.includes(p.account_id));
+                const pFactor = pComm ? Number(pComm.commission_percentage) : 0;
+                const platformCut = price * pFactor;
+
+                // Freelancer Math
+                let freelancerCut = 0;
+                if (p.designer_fee && Number(p.designer_fee) > 0) {
+                    freelancerCut = Number(p.designer_fee);
+                } else {
+                    const slab = slabs.find(s => price >= Number(s.min_price) && price <= Number(s.max_price));
+                    const fFactor = slab ? (Number(slab.freelancer_percentage) / 100) : 0.5;
+                    freelancerCut = (price - platformCut) * fFactor;
+                }
+
+                // Seller Math
+                const sComm = sellerComms.find(sc => sc.assigned_account_ids.includes(p.account_id));
+                const sFactor = sComm ? Number(sComm.commission_percentage) : 0;
+                const sellerCut = price * sFactor;
+                const profileName = Array.isArray(sComm?.profiles) ? sComm?.profiles[0]?.name : (sComm?.profiles as any)?.name;
+                const sellerName = sComm ? (profileName || 'Unknown User') : (p.primary_manager?.name || p.assignee || 'Unassigned');
+
+                // Standard Company Formula is Price - Platform - Freelancer
+                const companyEarning = price - platformCut - freelancerCut; 
+
+                return {
+                    ...p,
+                    sellerCut,
+                    platformCut,
+                    freelancerCut,
+                    companyEarning,
+                    sellerName,
+                    clientName: p.client_name || p.client || '-',
+                    project_id: p.project_id || p.id,
+                    project_title: p.project_title || 'Untitled',
+                    date: systemFormatDate(new Date(p.created_at || Date.now()))
+                };
+            });
+
+            // Filter out projects that do not have a mapped seller config 
+            // to ensure we only show valid earnings lines generated by a configured seller.
+            const validEarnings = enriched.filter(t => t.sellerCut > 0);
+            setTransactions(validEarnings.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()));
+        } catch (error) {
+            console.error('Failed fetching seller earnings', error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex flex-col sm:flex-row items-center justify-between px-2 gap-4">
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">Seller Earnings</h3>
+                <Button
+                    variant="metallic"
+                    size="sm"
+                    leftIcon={<IconRefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />}
+                    onClick={loadEarnings}
+                    className="w-full sm:w-auto"
+                >
+                    Refresh
+                </Button>
+            </div>
+
+            <Table
+                isLoading={loading}
+                isMetallicHeader={true}
+                emptyMessage="No seller earnings found. Projects must be completed/approved and assigned to an account with a configured Seller."
+                columns={[
+                    {
+                        header: 'Project ID',
+                        key: 'project_id',
+                        render: (item: any) => (
+                            <span className="font-semibold text-white/90">{item.project_id}</span>
+                        )
+                    },
+                    {
+                        header: 'Seller / Agent',
+                        key: 'sellerName',
+                        render: (item: any) => (
+                            <span className="font-bold text-white tracking-tight">{item.sellerName}</span>
+                        )
+                    },
+                    {
+                        header: 'Client',
+                        key: 'clientName',
+                        className: 'text-gray-400'
+                    },
+                    {
+                        header: 'Project Price',
+                        key: 'price',
+                        className: 'text-right',
+                        render: (item: any) => (
+                            <span className="text-white font-bold">${item.price.toFixed(2)}</span>
+                        )
+                    },
+                    {
+                        header: 'Platform Commission',
+                        key: 'platformCut',
+                        className: 'text-right',
+                        render: (item: any) => (
+                            <span className="text-gray-400 font-bold">${item.platformCut.toFixed(2)}</span>
+                        )
+                    },
+                    {
+                        header: 'Freelancer Cut',
+                        key: 'freelancerCut',
+                        className: 'text-right',
+                        render: (item: any) => (
+                            <span className="text-brand-info font-bold">${item.freelancerCut.toFixed(2)}</span>
+                        )
+                    },
+                    {
+                        header: 'Seller Commission',
+                        key: 'sellerCut',
+                        className: 'text-right',
+                        render: (item: any) => (
+                            <span className="text-brand-warning font-black tracking-wider drop-shadow-sm">${item.sellerCut.toFixed(2)}</span>
+                        )
+                    },
+                    {
+                        header: 'Company Earning',
+                        key: 'companyEarning',
+                        className: 'text-right',
+                        render: (item: any) => (
+                            <span className="text-brand-success font-black tracking-wider drop-shadow-sm">${item.companyEarning.toFixed(2)}</span>
+                        )
+                    },
+                    {
+                        header: 'Date',
+                        key: 'date',
+                        className: 'text-right text-gray-400 text-xs'
+                    }
+                ]}
+                data={transactions}
+            />
+        </div>
+    );
+};
+
+const SellerCommission: React.FC = () => {
+    const [activeTab, setActiveTab] = useState<'configs' | 'earnings'>('configs');
+
+    return (
+        <div className="space-y-6 animate-in fade-in duration-500">
+            <Tabs
+                tabs={[
+                    { id: 'configs', label: 'Seller Commissions', icon: <IconSettings size={16} /> },
+                    { id: 'earnings', label: 'Seller Earnings', icon: <IconDollar size={16} /> }
+                ]}
+                activeTab={activeTab}
+                onTabChange={(id) => setActiveTab(id as 'configs' | 'earnings')}
+            />
+
+            <div className="mt-4">
+                {activeTab === 'configs' && <SellerCommissionConfigs />}
+                {activeTab === 'earnings' && <SellerEarnings />}
+            </div>
         </div>
     );
 };
@@ -821,13 +1165,14 @@ const PricingSlabs: React.FC = () => {
 
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
-            <div className="flex items-center justify-between px-2">
+            <div className="flex flex-col sm:flex-row items-center justify-between px-2 gap-4">
                 <h3 className="text-sm font-bold text-white uppercase tracking-wider">Pricing Configurations</h3>
                 <Button
                     variant="metallic"
                     size="sm"
                     leftIcon={<IconPlus className="w-4 h-4" />}
                     onClick={() => setIsModalOpen(true)}
+                    className="w-full sm:w-auto"
                 >
                     Add Slab
                 </Button>
@@ -1041,7 +1386,6 @@ const CompanyEarnings: React.FC = () => {
     const [searchQuery, setSearchQuery] = useState('');
     const [loading, setLoading] = useState(true);
     const [projectsData, setProjectsData] = useState<any[]>([]);
-    const [filteredProjects, setFilteredProjects] = useState<any[]>([]);
     const [activeSummaryFilter, setActiveSummaryFilter] = useState<'all' | 'pipeline' | 'secured'>('pipeline');
 
     const fetchedRef = useRef(false);
@@ -1074,9 +1418,7 @@ const CompanyEarnings: React.FC = () => {
         };
     }, [accounts]);
 
-    useEffect(() => {
-        applyFilters();
-    }, [projectsData, fromDate, toDate, selectedAccount, activeSummaryFilter]);
+
 
     const fetchProjects = async (isInitial = false, passedCommissions?: any[], passedAccounts?: any[], passedSlabs?: any[]) => {
         try {
@@ -1178,7 +1520,8 @@ const CompanyEarnings: React.FC = () => {
     };
 
 
-    const applyFilters = () => {
+    // ── Derived state via useMemo (no intermediate renders = no flicker) ──────
+    const derived = useMemo(() => {
         let filtered = [...projectsData];
 
         // 1. Date Filter
@@ -1196,42 +1539,30 @@ const CompanyEarnings: React.FC = () => {
             filtered = filtered.filter(p => p.account_id === selectedAccount);
         }
 
-        // Calculate Stats based on CURRENT filters (except summary filter)
-        const pipeline = filtered.filter(p =>
+        // Stats (before summary filter)
+        const pipelineItems = filtered.filter(p =>
             p.status !== 'Completed' &&
             p.status !== 'Approved' &&
             p.status !== 'Removed' &&
             p.status !== 'Cancelled'
         );
-        const pipelineTotal = pipeline.reduce((sum, p) => sum + p.company_earning, 0);
-        const secured = filtered.filter(p => p.status === 'Completed' || p.status === 'Approved')
-            .reduce((sum, p) => sum + p.company_earning, 0);
-        const completedCount = filtered.filter(p => p.status === 'Completed' || p.status === 'Approved').length;
+        const securedItems = filtered.filter(p => p.status === 'Completed' || p.status === 'Approved');
+        const pipelineRevenue = pipelineItems.reduce((sum, p) => sum + p.company_earning, 0);
+        const securedRevenue = securedItems.reduce((sum, p) => sum + p.company_earning, 0);
+        const pipelineCount = pipelineItems.length;
+        const securedCount = securedItems.length;
 
-        setPipelineRevenue(pipelineTotal);
-        setSecuredRevenue(secured);
-        setPipelineCount(pipeline.length);
-        setSecuredCount(completedCount);
-
-        // 3. Summary Filter (Specific Card View)
+        // 3. Summary Filter (table view)
         if (activeSummaryFilter === 'pipeline') {
-            filtered = filtered.filter(p =>
-                p.status !== 'Completed' &&
-                p.status !== 'Approved' &&
-                p.status !== 'Removed' &&
-                p.status !== 'Cancelled'
-            );
+            filtered = [...pipelineItems];
         } else if (activeSummaryFilter === 'secured') {
-            filtered = filtered.filter(p => p.status === 'Completed' || p.status === 'Approved');
+            filtered = [...securedItems];
         }
 
-        setFilteredProjects(filtered);
-    };
+        return { filteredProjects: filtered, pipelineRevenue, securedRevenue, pipelineCount, securedCount };
+    }, [projectsData, fromDate, toDate, selectedAccount, activeSummaryFilter]);
 
-    const [pipelineRevenue, setPipelineRevenue] = useState(0);
-    const [securedRevenue, setSecuredRevenue] = useState(0);
-    const [pipelineCount, setPipelineCount] = useState(0);
-    const [securedCount, setSecuredCount] = useState(0);
+    const { filteredProjects, pipelineRevenue, securedRevenue, pipelineCount, securedCount } = derived;
 
     const fetchAccounts = async () => {
         // Redundant - now using useAccounts() from AccountContext which handles scoping
@@ -1319,7 +1650,7 @@ const CompanyEarnings: React.FC = () => {
     const handleExportCSV = () => {
         if (filteredProjects.length === 0) return;
 
-        const headers = ['Project ID', 'Project Title', 'Status', 'Client', 'Price', 'Platform Commission', 'Freelancer Cut', 'Company Earning', 'Account', 'Date'];
+        const headers = ['Project ID', 'Project Title', 'Status', 'Client', 'Price', 'Platform Commission', 'Freelancer Cut', 'Company Earning', 'Account', 'Order Type', 'Converted By', 'Date'];
         const csvRows = [headers.join(',')];
 
         filteredProjects.forEach(p => {
@@ -1333,6 +1664,8 @@ const CompanyEarnings: React.FC = () => {
                 `"${(p.freelancer_cut || 0).toFixed(2)}"`,
                 `"${(p.company_earning || 0).toFixed(2)}"`,
                 `"${p.account_prefix}"`,
+                `"${p.order_type || 'Direct'}"`,
+                `"${p.converted_by || '-'}"`,
                 `"${p.date}"`
             ];
             csvRows.push(row.join(','));
@@ -1538,7 +1871,7 @@ const CompanyEarnings: React.FC = () => {
                                 <p className={`text-xs font-bold uppercase tracking-widest mb-2 ${activeSummaryFilter === 'pipeline' ? 'text-white/80' : 'text-gray-400'}`}>Pipeline Revenue</p>
                                 <p className={`text-2xl font-black mb-1 ${activeSummaryFilter === 'pipeline' ? 'text-white' : 'text-brand-warning'}`}>${pipelineRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                                 <div className="flex items-center gap-2 mt-1">
-                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase tracking-tighter ${activeSummaryFilter === 'pipeline' ? 'bg-white/20 border-white/30 text-white' : 'bg-brand-warning/10 border-brand-warning/20 text-brand-warning'}`}>
+                                    <span className={activeSummaryFilter === 'pipeline' ? 'inline-flex items-center px-3 py-1 rounded-md text-[10px] font-black uppercase tracking-wider bg-white/20 text-white' : getStatusCapsuleClasses('in progress')}>
                                         {pipelineCount} Projects
                                     </span>
                                     <span className={`text-[10px] font-bold uppercase tracking-widest ${activeSummaryFilter === 'pipeline' ? 'text-white/70' : 'text-gray-500 opacity-60'}`}>In Pipeline</span>
@@ -1575,7 +1908,7 @@ const CompanyEarnings: React.FC = () => {
                                 <p className={`text-xs font-bold uppercase tracking-widest mb-2 ${activeSummaryFilter === 'secured' ? 'text-white/80' : 'text-gray-400'}`}>Secured Revenue</p>
                                 <p className={`text-2xl font-black mb-1 ${activeSummaryFilter === 'secured' ? 'text-white' : 'text-brand-success'}`}>${securedRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                                 <div className="flex items-center gap-2 mt-1">
-                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase tracking-tighter ${activeSummaryFilter === 'secured' ? 'bg-white/20 border-white/30 text-white' : 'bg-brand-success/10 border-brand-success/20 text-brand-success'}`}>
+                                    <span className={activeSummaryFilter === 'secured' ? 'inline-flex items-center px-3 py-1 rounded-md text-[10px] font-black uppercase tracking-wider bg-white/20 text-white' : getStatusCapsuleClasses('approved')}>
                                         {securedCount} Projects
                                     </span>
                                     <span className={`text-[10px] font-bold uppercase tracking-widest ${activeSummaryFilter === 'secured' ? 'text-white/70' : 'text-gray-500 opacity-60'}`}>Revenue Approved</span>
@@ -1615,19 +1948,28 @@ const CompanyEarnings: React.FC = () => {
                         {
                             header: 'Status',
                             key: 'status',
-                            render: (item: any) => {
-                                const isSecured = item.status === 'Approved' || item.status === 'Completed';
-                                const statusLabel = isSecured ? 'Approved' : 'In Progress';
-                                const colorClass = isSecured
-                                    ? 'bg-brand-success/10 border-brand-success/20 text-brand-success'
-                                    : 'bg-brand-warning/10 border-brand-warning/20 text-brand-warning';
-
+                            render: (p: any) => {
+                                const status = p.status || 'In Progress';
                                 return (
-                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase tracking-tighter ${colorClass}`}>
-                                        {statusLabel}
+                                    <span className={getStatusCapsuleClasses(status)}>
+                                        {status}
                                     </span>
                                 );
                             }
+                        },
+                        {
+                            header: 'Order Type',
+                            key: 'order_type',
+                            render: (item: any) => (
+                                <div className="flex flex-col">
+                                    <span className={`text-[10px] font-black uppercase tracking-wider ${item.order_type === 'Converted' ? 'text-brand-primary' : 'text-gray-400'}`}>
+                                        {item.order_type || 'Direct'}
+                                    </span>
+                                    {item.order_type === 'Converted' && item.converted_by && (
+                                        <span className="text-[10px] text-gray-500 font-medium truncate">By {item.converted_by}</span>
+                                    )}
+                                </div>
+                            )
                         },
                         {
                             header: 'Client',
@@ -2450,7 +2792,7 @@ const FreelancerEarnings: React.FC = () => {
 
                     {/* Sub Tabs & Actions Bar - Shared Row */}
                     {activeSummaryFilter === 'available' && (
-                        <div className="flex items-center justify-between mb-4">
+                        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mb-4">
                             <Tabs
                                 tabs={[
                                     { id: 'available', label: 'Available Amount', icon: <IconCheckCircle className="w-4 h-4" /> },
@@ -2466,7 +2808,7 @@ const FreelancerEarnings: React.FC = () => {
                                     size="md"
                                     variant="metallic"
                                     leftIcon={<IconCreditCard className="w-4 h-4" />}
-                                    className="whitespace-nowrap font-bold uppercase tracking-wider !h-10 !px-5"
+                                    className="w-full sm:w-auto whitespace-nowrap font-bold uppercase tracking-wider !h-10 !px-5"
                                     onClick={() => {
                                         const available = earningsData.filter(item => item.funds_status === 'Cleared').reduce((sum, item) => sum + (item.rawAmount || 0), 0);
                                         if (available > 0) {
@@ -2525,7 +2867,7 @@ const FreelancerEarnings: React.FC = () => {
                                     render: (item: any) => {
                                         if (activeSummaryFilter === 'pending') {
                                             return (
-                                                <span className="bg-brand-warning/10 text-brand-warning border border-brand-warning/20 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider">
+                                                <span className="bg-brand-warning/10 text-brand-warning border border-brand-warning/20 px-3 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider">
                                                     {item.daysLeft || 0} Days
                                                 </span>
                                             );
@@ -2533,7 +2875,7 @@ const FreelancerEarnings: React.FC = () => {
                                         const status = activeSummaryFilter === 'available' ? 'Unpaid' : item.funds_status;
                                         const isSuccess = status === 'Cleared' || status === 'Paid';
                                         return (
-                                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider ${isSuccess ? 'bg-brand-success/10 text-brand-success border border-brand-success/20' : 'bg-brand-warning/10 text-brand-warning border border-brand-warning/20'
+                                            <span className={`px-3 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider ${isSuccess ? 'bg-brand-success/10 text-brand-success border border-brand-success/20' : 'bg-brand-warning/10 text-brand-warning border border-brand-warning/20'
                                                 }`}>
                                                 {status}
                                             </span>
@@ -2927,6 +3269,7 @@ const FreelancerEarnings: React.FC = () => {
 const Finances: React.FC = () => {
     const { hasPermission } = useUser();
     const [activeTab, setActiveTab] = useState(getInitialTab('Finances', 'commission'));
+    const [isTabSelectorOpen, setIsTabSelectorOpen] = useState(false);
 
     const allTabs = [
         { id: 'commission', label: 'Platform Commission', icon: <IconSettings className="w-4 h-4" />, permission: 'manage_finance_config' },
@@ -2959,7 +3302,62 @@ const Finances: React.FC = () => {
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700 fill-mode-both">
             {availableTabs.length > 1 && (
-                <Tabs tabs={availableTabs} activeTab={activeTab} onTabChange={setActiveTab} />
+                <>
+                    {/* Desktop Tabs */}
+                    <div className="hidden md:block">
+                        <Tabs tabs={availableTabs} activeTab={activeTab} onTabChange={setActiveTab} />
+                    </div>
+
+                    {/* Mobile Tab Selector */}
+                    <div className="md:hidden flex flex-col gap-2">
+                        <button
+                            onClick={() => setIsTabSelectorOpen(!isTabSelectorOpen)}
+                            className="flex items-center justify-between w-full h-14 px-5 bg-black/40 border border-white/5 rounded-2xl shadow-[inset_0_2px_4px_rgba(0,0,0,0.6)] group active:scale-[0.98] transition-all"
+                        >
+                            <div className="flex flex-col items-start translate-y-0.5">
+                                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500 mb-0.5">Select Section</span>
+                                <span className="text-xs font-bold text-white uppercase tracking-wider">
+                                    {availableTabs.find(t => t.id === activeTab)?.label}
+                                </span>
+                            </div>
+                            <IconChevronRight
+                                className={`w-5 h-5 text-gray-500 transition-transform duration-300 ${isTabSelectorOpen ? 'rotate-90 text-brand-primary' : ''}`}
+                            />
+                        </button>
+
+                        {isTabSelectorOpen && (
+                            <div className="flex flex-col gap-1.5 p-1.5 bg-black/40 border border-white/5 rounded-2xl shadow-[inset_0_2px_4px_rgba(0,0,0,0.6)] animate-in fade-in slide-in-from-top-2 duration-300">
+                                {availableTabs.map((tab) => {
+                                    const isActive = activeTab === tab.id;
+                                    return (
+                                        <button
+                                            key={tab.id}
+                                            onClick={() => {
+                                                setActiveTab(tab.id);
+                                                setIsTabSelectorOpen(false);
+                                            }}
+                                            className={`
+                                                relative flex items-center justify-center h-11 px-4 rounded-xl transition-all duration-300 text-[10px] font-black uppercase tracking-widest outline-none overflow-hidden
+                                                ${isActive ? 'text-white' : 'text-gray-500 hover:text-gray-300'}
+                                            `}
+                                        >
+                                            {isActive && (
+                                                <>
+                                                    <div className="absolute inset-0 bg-gradient-to-b from-[#FF6B4B] to-[#D9361A] border border-[#FF6B4B]/50 shadow-[0_8px_15px_-2px_rgba(255,107,75,0.3),inset_0_1px_0_rgba(255,255,255,0.4)] rounded-xl duration-200" />
+                                                    <div className="absolute inset-0 bg-[linear-gradient(135deg,transparent_0%,rgba(255,255,255,0.2)_50%,transparent_100%)] pointer-events-none opacity-50 z-10" />
+                                                </>
+                                            )}
+                                            <span className="relative z-20 flex items-center gap-2">
+                                                {tab.icon}
+                                                {tab.label}
+                                            </span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                </>
             )}
             <div className={`mt-8 min-h-[420px] ${availableTabs.length === 0 ? 'flex items-center justify-center' : ''}`}>
                 {availableTabs.length === 0 ? (

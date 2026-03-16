@@ -140,7 +140,6 @@ export const DatePicker: React.FC<DatePickerProps> = ({
                     disabled={disabled}
                     error={error}
                     variant={variant}
-                    leftIcon={<IconCalendar className="w-4 h-4" />}
                     onClick={() => {
                         if (!disabled) {
                             if (!isOpen) updateCoords();

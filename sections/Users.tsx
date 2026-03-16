@@ -3,12 +3,13 @@ import { Card, Modal } from '../components/Surfaces';
 import Button from '../components/Button';
 import { Table } from '../components/Table';
 import { Avatar } from '../components/Avatar';
-import { IconPlus, IconSearch, IconFilter, IconMoreVertical, IconUser, IconUsers, IconClock, IconBell, IconMail, IconEdit, IconTrash, IconRefreshCw, IconAlertTriangle, IconCopy, IconCheckSquare, IconChevronDown } from '../components/Icons';
+import { IconPlus, IconSearch, IconFilter, IconMoreVertical, IconUser, IconUsers, IconClock, IconBell, IconMail, IconEdit, IconTrash, IconRefreshCw, IconAlertTriangle, IconCopy, IconCheckSquare, IconChevronDown, IconArrowRight, IconUserPlus } from '../components/Icons';
 import { Tabs } from '../components/Navigation';
 import { Input } from '../components/Input';
 import { Dropdown } from '../components/Dropdown';
 import { Checkbox } from '../components/Selection';
 import { KebabMenu } from '../components/KebabMenu';
+import { RoleCapsule } from '../components/Badge';
 import { addToast } from '../components/Toast';
 import { supabase } from '../lib/supabase';
 import { createClient } from '@supabase/supabase-js';
@@ -24,6 +25,15 @@ interface Member {
     status: string;
     joined: string;
     isInvitation?: boolean;
+}
+
+interface AccountRequest {
+    id: string;
+    first_name: string;
+    last_name: string;
+    email: string;
+    created_at: string;
+    status: string;
 }
 
 interface UsersProps {
@@ -59,7 +69,11 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
     const [activeTab, setActiveTab] = useState(getInitialTab('Users', 'users'));
     const [selectedIds, setSelectedIds] = useState<string[]>([]);
     const [isSelectionMode, setIsSelectionMode] = useState(false);
-    const [filterState, setFilterState] = useState<'total' | 'active' | 'pending'>('total');
+    const [filterState, setFilterState] = useState<'total' | 'active' | 'pending' | 'requests'>('total');
+
+    const [accountRequests, setAccountRequests] = useState<AccountRequest[]>([]);
+    const [selectedRequest, setSelectedRequest] = useState<AccountRequest | null>(null);
+    const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
 
     // Team Modal State
     const [isTeamModalOpen, setIsTeamModalOpen] = useState(false);
@@ -72,6 +86,9 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
     const [pendingBulkAction, setPendingBulkAction] = useState<string | null>(null);
     const [isDeleteTeamModalOpen, setIsDeleteTeamModalOpen] = useState(false);
     const [teamToDelete, setTeamToDelete] = useState<any | null>(null);
+    const [selectedTeam, setSelectedTeam] = useState<any | null>(null);
+    const [isViewTeamModalOpen, setIsViewTeamModalOpen] = useState(false);
+    const [editingTeamId, setEditingTeamId] = useState<string | null>(null);
 
     const tabs = [
         { id: 'users', label: 'Users', icon: <IconUser size={16} /> },
@@ -82,7 +99,10 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
     const [showSuccess, setShowSuccess] = useState(false);
     const [createdMember, setCreatedMember] = useState<any>(null);
 
-    const [profiles, setProfiles] = useState<Member[]>([]);
+    const [profiles, setProfiles] = useState<Member[]>(() => {
+        const cached = localStorage.getItem('nova_users_cache');
+        return cached ? JSON.parse(cached) : [];
+    });
     const [invitations, setInvitations] = useState<Member[]>([]);
     const [teams, setTeams] = useState<any[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -124,7 +144,7 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
 
             if (inviteError) throw inviteError;
 
-            setProfiles(profileData.map((p: any) => ({
+            const formattedProfiles = profileData.map((p: any) => ({
                 id: p.id,
                 name: formatDisplayName(p.name),
                 email: p.email,
@@ -133,7 +153,14 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
                 avatar_url: p.avatar_url,
                 joined: new Date(p.created_at).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' }),
                 isInvitation: false
-            })));
+            }));
+
+            setProfiles(formattedProfiles);
+            try {
+                localStorage.setItem('nova_users_cache', JSON.stringify(formattedProfiles));
+            } catch (e) {
+                console.warn('LocalStorage quota exceeded while caching users:', e);
+            }
 
             setInvitations(inviteData.map((i: any) => ({
                 id: i.id,
@@ -154,6 +181,15 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
             if (accountsData) {
                 setAvailableAccounts(accountsData);
             }
+
+            // Fetch account requests
+            const { data: requestData, error: requestError } = await supabase
+                .from('account_requests_designers')
+                .select('*')
+                .order('created_at', { ascending: false });
+
+            if (requestError) throw requestError;
+            setAccountRequests(requestData || []);
 
         } catch (error: any) {
             console.error('Error fetching members:', error);
@@ -183,11 +219,13 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
                 id: t.id,
                 name: t.name,
                 memberNames: t.team_members.map((tm: any) => formatDisplayName(tm.profiles?.name)),
+                memberIds: t.team_members.map((tm: any) => tm.member_id),
                 memberInitials: t.team_members.map((tm: any) =>
                     (tm.profiles?.name || '').split(' ').map((n: string) => n[0]).join('').toUpperCase()
                 ).slice(0, 3),
                 totalMembers: t.team_members.length,
-                accounts: t.team_accounts.map((ta: any) => ta.accounts?.name)
+                accounts: t.team_accounts.map((ta: any) => ta.accounts?.name),
+                accountIds: t.team_accounts.map((ta: any) => ta.account_id)
             }));
 
             setTeams(formattedTeams);
@@ -238,7 +276,10 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
         if (filterState === 'active') {
             combined = combined.filter(m => m.status === 'Active');
         } else if (filterState === 'pending') {
-            combined = combined.filter(m => m.isInvitation || m.status === 'Pending');
+            combined = combined.filter(m => m.isInvitation || m.status === 'Pending' || m.status === 'Invited');
+        } else if (filterState === 'total') {
+            // Exclude those who haven't joined yet from the main "Total Members" list
+            combined = combined.filter(m => m.status !== 'Pending' && m.status !== 'Invited' && !m.isInvitation);
         }
 
         if (!searchQuery) return combined;
@@ -251,12 +292,19 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
     }, [profiles, invitations, searchQuery, filterState]);
 
     const stats = useMemo(() => {
+        const pendingMembers = profiles.filter(p => p.status === 'Pending' || p.status === 'Invited');
+        const pendingCount = invitations.length + pendingMembers.length;
+        
+        // Total members now excludes those who haven't joined yet to match the "Total Members" filter logic
+        const totalCount = profiles.length + invitations.length - pendingCount;
+
         return {
-            total: profiles.length + invitations.length,
+            total: totalCount,
             active: profiles.filter(p => p.status === 'Active').length,
-            pending: invitations.length
+            pending: pendingCount,
+            requests: accountRequests.length
         };
-    }, [profiles, invitations]);
+    }, [profiles, invitations, accountRequests]);
 
     const confirmRemoveMember = (member: Member) => {
         setUserToRemove(member);
@@ -293,6 +341,34 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
         } finally {
             setIsUpdating(false);
         }
+    };
+
+    const handleRejectRequest = async (requestId: string) => {
+        try {
+            const { error } = await supabase
+                .from('account_requests_designers')
+                .delete()
+                .eq('id', requestId);
+
+            if (error) throw error;
+            addToast({ type: 'success', title: 'Request Cancelled', message: 'Account request has been removed.' });
+            fetchMembers();
+            setIsPreviewModalOpen(false);
+            setSelectedRequest(null);
+        } catch (error: any) {
+            addToast({ type: 'error', title: 'Action Failed', message: error.message });
+        }
+    };
+
+    const handleAcceptRequest = (request: AccountRequest) => {
+        // Close preview and open Add Member modal pre-filled
+        setIsPreviewModalOpen(false);
+        setFirstName(request.first_name);
+        setLastName(request.last_name);
+        setEmail(''); // User explicitly asked to keep email field empty to set
+        setRole('Freelancer');
+        setPassword('');
+        setIsModalOpen(true);
     };
 
     const handleEditPermissions = (member: Member) => {
@@ -540,7 +616,7 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
         }
     };
 
-    const handleCreateTeam = async () => {
+    const handleSaveTeam = async () => {
         if (!newTeamName || selectedTeamMemberIds.length === 0 || selectedAccountIds.length === 0) {
             addToast({ type: 'error', title: 'Missing Info', message: 'Please complete all team details.' });
             return;
@@ -548,43 +624,74 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
 
         setIsSavingTeam(true);
         try {
-            // 1. Insert Team
-            const { data: team, error: teamError } = await supabase
-                .from('teams')
-                .insert([{ name: newTeamName }])
-                .select()
-                .single();
+            if (editingTeamId) {
+                // 1. Update Team Name
+                const { error: teamError } = await supabase
+                    .from('teams')
+                    .update({ name: newTeamName })
+                    .eq('id', editingTeamId);
 
-            if (teamError) throw teamError;
+                if (teamError) throw teamError;
 
-            // 2. Insert Members
-            const memberInserts = selectedTeamMemberIds.map(id => ({
-                team_id: team.id,
-                member_id: id
-            }));
-            const { error: membersError } = await supabase.from('team_members').insert(memberInserts);
-            if (membersError) throw membersError;
+                // 2. Sync Members (Delete old + Insert new)
+                await supabase.from('team_members').delete().eq('team_id', editingTeamId);
+                const memberInserts = selectedTeamMemberIds.map(id => ({
+                    team_id: editingTeamId,
+                    member_id: id
+                }));
+                const { error: membersError } = await supabase.from('team_members').insert(memberInserts);
+                if (membersError) throw membersError;
 
-            // 3. Insert Accounts
-            const accountInserts = selectedAccountIds.map(id => ({
-                team_id: team.id,
-                account_id: id
-            }));
-            const { error: accountsError } = await supabase.from('team_accounts').insert(accountInserts);
-            if (accountsError) throw accountsError;
+                // 3. Sync Accounts (Delete old + Insert new)
+                await supabase.from('team_accounts').delete().eq('team_id', editingTeamId);
+                const accountInserts = selectedAccountIds.map(id => ({
+                    team_id: editingTeamId,
+                    account_id: id
+                }));
+                const { error: accountsError } = await supabase.from('team_accounts').insert(accountInserts);
+                if (accountsError) throw accountsError;
 
-            addToast({ type: 'success', title: 'Team Created', message: `${newTeamName} has been initialized.` });
+                addToast({ type: 'success', title: 'Team Updated', message: `${newTeamName} has been updated.` });
+            } else {
+                // 1. Insert Team
+                const { data: team, error: teamError } = await supabase
+                    .from('teams')
+                    .insert([{ name: newTeamName }])
+                    .select()
+                    .single();
+
+                if (teamError) throw teamError;
+
+                // 2. Insert Members
+                const memberInserts = selectedTeamMemberIds.map(id => ({
+                    team_id: team.id,
+                    member_id: id
+                }));
+                const { error: membersError } = await supabase.from('team_members').insert(memberInserts);
+                if (membersError) throw membersError;
+
+                // 3. Insert Accounts
+                const accountInserts = selectedAccountIds.map(id => ({
+                    team_id: team.id,
+                    account_id: id
+                }));
+                const { error: accountsError } = await supabase.from('team_accounts').insert(accountInserts);
+                if (accountsError) throw accountsError;
+
+                addToast({ type: 'success', title: 'Team Created', message: `${newTeamName} has been initialized.` });
+            }
 
             // Cleanup and Refresh
             setIsTeamModalOpen(false);
+            setEditingTeamId(null);
             setNewTeamName('');
             setSelectedTeamMemberIds([]);
             setSelectedAccountIds([]);
             fetchTeams();
 
         } catch (error: any) {
-            console.error('Error creating team:', error);
-            addToast({ type: 'error', title: 'Creation Failed', message: error.message });
+            console.error('Error saving team:', error);
+            addToast({ type: 'error', title: 'Save Failed', message: error.message });
         } finally {
             setIsSavingTeam(false);
         }
@@ -617,13 +724,21 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
         setIsDeleteTeamModalOpen(true);
     };
 
-    const projectManagers = useMemo(() => {
+    const handleEditTeam = (team: any) => {
+        setEditingTeamId(team.id);
+        setNewTeamName(team.name);
+        setSelectedTeamMemberIds(team.memberIds || []);
+        setSelectedAccountIds(team.accountIds || []);
+        setIsTeamModalOpen(true);
+    };
+
+    const eligibleTeamMembers = useMemo(() => {
         return profiles
             .filter(p => {
                 const r = p.role?.toLowerCase().trim();
-                return r === 'project manager';
+                return r && r !== 'freelancer' && r !== 'super admin' && r !== 'superadmin';
             })
-            .map(p => ({ label: p.name, value: p.id, description: p.email }));
+            .map(p => ({ label: p.name, value: p.id, description: p.role }));
     }, [profiles]);
 
     const accountOptions = useMemo(() => {
@@ -650,6 +765,47 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
     };
 
     const columns = useMemo(() => {
+        if (filterState === 'requests') {
+            return [
+                {
+                    header: 'First Name',
+                    key: 'first_name',
+                    render: (item: any) => <span className="text-white/90 font-semibold">{item.first_name}</span>
+                },
+                {
+                    header: 'Last Name',
+                    key: 'last_name',
+                    render: (item: any) => <span className="text-white/90 font-semibold">{item.last_name}</span>
+                },
+                {
+                    header: 'Email',
+                    key: 'email',
+                    render: (item: any) => <span className="text-gray-400 font-medium">{item.email}</span>
+                },
+                {
+                    header: 'Request Date',
+                    key: 'created_at',
+                    render: (item: any) => <span className="text-gray-400 font-medium">{new Date(item.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+                },
+                {
+                    header: '',
+                    key: 'actions',
+                    className: 'text-right w-10',
+                    render: (item: any) => (
+                        <button
+                            onClick={() => {
+                                setSelectedRequest(item);
+                                setIsPreviewModalOpen(true);
+                            }}
+                            className="p-2 hover:bg-white/5 rounded-lg text-gray-500 hover:text-white transition-colors"
+                        >
+                            <IconArrowRight size={18} />
+                        </button>
+                    )
+                }
+            ];
+        }
+
         const baseColumns = [
             {
                 header: 'User',
@@ -679,16 +835,16 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
                 header: 'Role',
                 key: 'role',
                 className: 'min-w-[180px]',
-                render: (item: any) => <span className="text-gray-400 font-medium">{item.role}</span>
+                render: (item: any) => <RoleCapsule role={item.role} className="w-fit" />
             },
             {
                 header: 'Status',
                 key: 'status',
                 className: 'min-w-[120px]',
                 render: (item: any) => (
-                    <span className={`px-2 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider border ${item.status === 'Active' ? 'bg-brand-success/10 text-brand-success border-brand-success/20' :
-                        item.status === 'Pending' ? 'bg-brand-warning/10 text-brand-warning border-brand-warning/20' :
-                            'bg-brand-error/10 text-brand-error border-brand-error/20'
+                    <span className={`px-3 py-1 rounded-md text-[10px] font-black uppercase tracking-wider whitespace-nowrap ${item.status === 'Active' ? 'bg-green-600/20 text-green-600' :
+                            item.status === 'Pending' ? 'bg-amber-600/20 text-amber-600' :
+                                'bg-red-600/20 text-red-600'
                         }`}>
                         {item.status === 'Disabled' ? 'Deactivated' : item.status}
                     </span>
@@ -760,7 +916,7 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
         }
 
         return baseColumns;
-    }, [isSelectionMode, selectedIds, allMembers, onUserOpen]);
+    }, [isSelectionMode, selectedIds, allMembers, onUserOpen, filterState]);
 
     const teamColumns = [
         {
@@ -782,7 +938,7 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
             render: (item: any) => (
                 <div className="flex flex-wrap gap-1">
                     {item.memberNames.map((name: string, idx: number) => (
-                        <span key={idx} className="px-2 py-0.5 rounded-md bg-brand-primary/5 border border-brand-primary/10 text-[10px] text-brand-primary font-medium">
+                        <span key={idx} className="px-3 py-1 rounded-md bg-gray-600/20 text-[10px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap">
                             {name}
                         </span>
                     ))}
@@ -792,15 +948,24 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
         {
             header: 'Accounts',
             key: 'accounts',
-            render: (item: any) => (
-                <div className="flex flex-wrap gap-1">
-                    {item.accounts.map((acc: string, idx: number) => (
-                        <span key={idx} className="px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-[10px] text-gray-400 font-medium">
-                            {acc}
-                        </span>
-                    ))}
-                </div>
-            )
+            render: (item: any) => {
+                const visibleAccounts = item.accounts.slice(0, 3);
+                const overflow = item.accounts.length - 3;
+                return (
+                    <div className="flex flex-wrap items-center gap-1">
+                        {visibleAccounts.map((acc: string, idx: number) => (
+                            <span key={idx} className="px-3 py-1 rounded-md bg-gray-600/20 text-[10px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap">
+                                {acc}
+                            </span>
+                        ))}
+                        {overflow > 0 && (
+                            <span className="px-3 py-1 rounded-md bg-brand-primary/20 text-[10px] text-brand-primary font-black uppercase tracking-widest whitespace-nowrap">
+                                +{overflow} more
+                            </span>
+                        )}
+                    </div>
+                );
+            }
         },
         {
             header: '',
@@ -809,8 +974,21 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
             render: (item: any) => (
                 <KebabMenu
                     options={[
-                        { label: 'View', icon: <IconUser size={14} />, onClick: () => onUserOpen(item.id) },
-                        ...(hasPermission('edit_users') ? [{ label: 'Edit', icon: <IconEdit size={14} />, onClick: () => console.log('Edit', item.id) }] : []),
+                        {
+                            label: 'View',
+                            icon: <IconUsers size={14} />,
+                            onClick: () => {
+                                setSelectedTeam(item);
+                                setIsViewTeamModalOpen(true);
+                            }
+                        },
+                        ...(hasPermission('manage_teams') ? [
+                            {
+                                label: 'Edit',
+                                icon: <IconEdit size={14} />,
+                                onClick: () => handleEditTeam(item)
+                            }
+                        ] : []),
                         ...(hasPermission('manage_teams') ? [{ label: 'Delete', icon: <IconTrash size={14} />, variant: 'danger' as const, onClick: () => confirmDeleteTeam(item) }] : [])
                     ]}
                 />
@@ -841,7 +1019,7 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
 
             {activeTab === 'users' ? (
                 <>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                         <Card
                             isElevated={true}
                             disableHover={filterState === 'total'}
@@ -866,10 +1044,7 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
                                         <IconUser size={24} />
                                     </div>
                                 </div>
-                                <div className="flex items-center gap-2 mt-4">
-                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${filterState === 'total' ? 'bg-white/20 border-white/30 text-white' : 'text-brand-success bg-brand-success/10 border-brand-success/20'}`}>+12%</span>
-                                    <span className={`text-[10px] font-medium uppercase tracking-widest ${filterState === 'total' ? 'text-white/70' : 'text-gray-500'}`}>Growth this month</span>
-                                </div>
+
                             </div>
                         </Card>
 
@@ -900,9 +1075,7 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
                                         </div>
                                     </div>
                                 </div>
-                                <div className="flex items-center gap-2 mt-4">
-                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase tracking-widest ${filterState === 'active' ? 'bg-white/20 border-white/30 text-white' : 'text-gray-400 bg-white/5 border-white/10'}`}>Real-time sync</span>
-                                </div>
+
                             </div>
                         </Card>
 
@@ -928,6 +1101,33 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
                                     </div>
                                     <div className={`w-12 h-12 rounded-2xl flex items-center justify-center border transition-all ${filterState === 'pending' ? 'bg-white/20 border-white/30 text-white' : 'bg-white/5 border-white/10 text-gray-400 group-hover:bg-brand-warning/10 group-hover:border-brand-warning/20 group-hover:text-brand-warning'}`}>
                                         <IconBell size={24} />
+                                    </div>
+                                </div>
+                            </div>
+                        </Card>
+
+                        <Card
+                            isElevated={true}
+                            disableHover={filterState === 'requests'}
+                            className={`h-full p-0 border-2 rounded-2xl relative overflow-hidden group min-h-[140px] cursor-pointer transition-all duration-300 ${filterState === 'requests'
+                                ? 'bg-gradient-to-b from-[#FF6B4B] to-[#D9361A] border-[#FF4D2D] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_-1px_0_rgba(0,0,0,0.2)]'
+                                : 'border-white/10 bg-[#1A1A1A] hover:border-brand-primary/30'
+                                }`}
+                            bodyClassName="h-full flex flex-col justify-between"
+                            onClick={() => setFilterState('requests')}
+                        >
+                            {/* Full Surface Metallic Shine */}
+                            <div className={`absolute inset-0 bg-[linear-gradient(115deg,rgba(255,255,255,0.02)_0%,rgba(255,255,255,0.05)_40%,rgba(255,255,255,0.1)_50%,rgba(255,255,255,0.05)_60%,rgba(255,255,255,0.02)_100%)] pointer-events-none ${filterState === 'requests' ? 'opacity-100' : 'opacity-70'}`} />
+                            <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.05)_0%,transparent_70%)] pointer-events-none" />
+
+                            <div className="p-6 relative z-10 w-full h-full flex flex-col justify-between">
+                                <div className="flex justify-between items-start">
+                                    <div className="space-y-1">
+                                        <p className={`text-[10px] font-bold uppercase tracking-[0.2em] mb-2 ${filterState === 'requests' ? 'text-white/80' : 'text-gray-500'}`}>Account Requests</p>
+                                        <p className="text-4xl font-bold text-white tracking-tight">{stats.requests}</p>
+                                    </div>
+                                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center border transition-all ${filterState === 'requests' ? 'bg-white/20 border-white/30 text-white' : 'bg-white/5 border-white/10 text-gray-400 group-hover:bg-brand-primary/10 group-hover:border-brand-primary/20 group-hover:text-brand-primary'}`}>
+                                        <IconUserPlus size={24} />
                                     </div>
                                 </div>
                             </div>
@@ -1001,19 +1201,16 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
                             </div>
                         </div>
                         <div className="relative">
-                            {isLoading && (allMembers.length > 0) && (
-                                <div className="absolute -top-1 left-0 w-full h-0.5 z-30 overflow-hidden bg-white/5 rounded-full">
-                                    <div className="h-full bg-brand-primary animate-[shimmer_1.5s_infinite] origin-left w-1/3" />
-                                </div>
-                            )}
                             <Table
                                 columns={columns}
-                                data={allMembers}
-                                isLoading={isLoading && allMembers.length === 0}
+                                data={filterState === 'requests' ? accountRequests : allMembers}
+                                isLoading={isLoading}
                                 isMetallicHeader={true}
-                                className={`transition-all duration-300 ${isLoading && allMembers.length > 0 ? 'opacity-60 grayscale-[0.5]' : 'opacity-100 grayscale-0'}`}
                                 onRowClick={(item: any) => {
-                                    if (isSelectionMode) {
+                                    if (filterState === 'requests') {
+                                        setSelectedRequest(item);
+                                        setIsPreviewModalOpen(true);
+                                    } else if (isSelectionMode) {
                                         handleToggleRow(item.id);
                                     } else if (!item.isInvitation) {
                                         onUserOpen(item.id);
@@ -1361,19 +1558,31 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
             {/* Create Team Modal */}
             <Modal
                 isOpen={isTeamModalOpen}
-                onClose={() => setIsTeamModalOpen(false)}
-                title="Create New Team"
+                onClose={() => {
+                    setIsTeamModalOpen(false);
+                    setEditingTeamId(null);
+                    setNewTeamName('');
+                    setSelectedTeamMemberIds([]);
+                    setSelectedAccountIds([]);
+                }}
+                title={editingTeamId ? "Edit Team" : "Create New Team"}
                 size="md"
                 footer={
                     <div className="flex items-center justify-end gap-3 w-full">
-                        <Button variant="ghost" onClick={() => setIsTeamModalOpen(false)} disabled={isSavingTeam}>Cancel</Button>
+                        <Button variant="ghost" onClick={() => {
+                            setIsTeamModalOpen(false);
+                            setEditingTeamId(null);
+                            setNewTeamName('');
+                            setSelectedTeamMemberIds([]);
+                            setSelectedAccountIds([]);
+                        }} disabled={isSavingTeam}>Cancel</Button>
                         <Button
                             variant="metallic"
-                            onClick={handleCreateTeam}
+                            onClick={handleSaveTeam}
                             isLoading={isSavingTeam}
                             className="px-8 shadow-lg"
                         >
-                            Initialize Team
+                            {editingTeamId ? "Update Team" : "Initialize Team"}
                         </Button>
                     </div>
                 }
@@ -1392,17 +1601,17 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
                     </div>
 
                     <div className="space-y-2">
-                        <p className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Team Members (Project Managers)</p>
+                        <p className="text-xs font-bold text-gray-500 uppercase tracking-widest ml-1">Team Members</p>
                         <Dropdown
                             isMulti
-                            options={projectManagers}
+                            options={eligibleTeamMembers}
                             value={selectedTeamMemberIds}
                             onChange={(val) => setSelectedTeamMemberIds(val)}
-                            placeholder="Select Project Managers"
+                            placeholder="Select Team Members"
                             variant="metallic"
                             size="md"
                             showSearch
-                            selectionLabel="Project Managers selected"
+                            selectionLabel="Team Members selected"
                         />
                     </div>
 
@@ -1456,6 +1665,133 @@ const Users = forwardRef<UsersHandle, UsersProps>(({ onUserOpen, isUserOpen }, r
                         </p>
                     </div>
                 </div>
+            </Modal>
+
+            {/* View Team Details Modal */}
+            <Modal
+                isOpen={isViewTeamModalOpen}
+                onClose={() => setIsViewTeamModalOpen(false)}
+                title="Team Details"
+                size="md"
+                footer={
+                    <div className="flex justify-end w-full">
+                        <Button variant="metallic" onClick={() => setIsViewTeamModalOpen(false)} className="px-8">Close</Button>
+                    </div>
+                }
+            >
+                {selectedTeam && (
+                    <div className="space-y-6">
+                        <div className="flex items-center gap-4 p-4 rounded-2xl bg-brand-primary/5 border border-brand-primary/20">
+                            <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center text-brand-primary border border-brand-primary/20">
+                                <IconUsers size={24} />
+                            </div>
+                            <div>
+                                <h3 className="text-lg font-bold text-white uppercase tracking-tight">{selectedTeam.name}</h3>
+                                <p className="text-xs text-gray-500 uppercase tracking-widest font-bold">{selectedTeam.totalMembers} Members Assigned</p>
+                            </div>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div className="space-y-2">
+                                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em] ml-1">Assigned Project Managers</p>
+                                <div className="flex flex-wrap gap-2 p-4 rounded-xl bg-black/40 border border-white/[0.05] shadow-inner">
+                                    {selectedTeam.memberNames.length > 0 ? (
+                                        selectedTeam.memberNames.map((name: string, i: number) => (
+                                            <span key={i} className="px-3 py-1 rounded-lg bg-brand-primary/10 border border-brand-primary/20 text-[11px] text-brand-primary font-bold uppercase tracking-wider">
+                                                {name}
+                                            </span>
+                                        ))
+                                    ) : (
+                                        <p className="text-xs text-gray-600 italic">No members assigned to this team.</p>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="space-y-2">
+                                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em] ml-1">Linked Accounts</p>
+                                <div className="flex flex-wrap gap-2 p-4 rounded-xl bg-black/40 border border-white/[0.05] shadow-inner">
+                                    {selectedTeam.accounts.length > 0 ? (
+                                        selectedTeam.accounts.map((acc: string, i: number) => (
+                                            <span key={i} className="px-3 py-1 rounded-lg bg-white/5 border border-white/10 text-[11px] text-gray-400 font-bold uppercase tracking-wider">
+                                                {acc}
+                                            </span>
+                                        ))
+                                    ) : (
+                                        <p className="text-xs text-gray-600 italic">No accounts linked to this team.</p>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </Modal>
+
+            {/* Account Request Preview Modal */}
+            <Modal
+                isOpen={isPreviewModalOpen}
+                onClose={() => setIsPreviewModalOpen(false)}
+                title="Account Request Details"
+                size="md"
+                isElevatedFooter
+                footer={
+                    <div className="flex items-center justify-end gap-3 w-full">
+                        <Button variant="recessed" onClick={() => selectedRequest && handleRejectRequest(selectedRequest.id)} className="px-6">Cancel Request</Button>
+                        <Button
+                            variant="metallic"
+                            onClick={() => selectedRequest && handleAcceptRequest(selectedRequest)}
+                            className="px-8 shadow-lg shadow-brand-primary/20"
+                        >
+                            Accept Request
+                        </Button>
+                    </div>
+                }
+            >
+                {selectedRequest && (
+                    <div className="space-y-6">
+                        <div className="p-6 rounded-2xl bg-black/40 border border-white/[0.05] shadow-inner relative overflow-hidden">
+                            <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/5 via-transparent to-transparent opacity-50" />
+                            
+                            <div className="relative z-10 space-y-6">
+                                <div className="grid grid-cols-2 gap-8">
+                                    <div className="space-y-1">
+                                        <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">First Name</p>
+                                        <p className="text-lg font-bold text-white">{selectedRequest.first_name}</p>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Last Name</p>
+                                        <p className="text-lg font-bold text-white">{selectedRequest.last_name}</p>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-1">
+                                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Email Address</p>
+                                    <p className="text-lg font-bold text-white">{selectedRequest.email}</p>
+                                </div>
+
+                                <div className="space-y-1">
+                                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Request Date</p>
+                                    <p className="font-medium text-gray-300">
+                                        {new Date(selectedRequest.created_at).toLocaleString('en-US', { 
+                                            day: '2-digit', month: 'long', year: 'numeric', 
+                                            hour: '2-digit', minute: '2-digit',
+                                            hour12: true
+                                        })}
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex items-start gap-4 p-4 rounded-xl bg-brand-primary/5 border border-brand-primary/10">
+                            <IconAlertTriangle className="w-5 h-5 text-brand-primary shrink-0 mt-0.5" />
+                            <div className="space-y-1">
+                                <p className="text-xs font-bold text-white uppercase tracking-wider">Next Step</p>
+                                <p className="text-[11px] text-gray-400 leading-relaxed font-medium">
+                                    Accepting this request will allow you to create a platform account for this designer. They will be automatically assigned the <span className="text-white font-bold">Freelancer</span> role.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </Modal>
         </div>
     );

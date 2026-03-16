@@ -10,8 +10,9 @@ import { Dropdown } from '../components/Dropdown';
 import { IconCalendar, IconX, IconChartBar, IconClock, IconCheckCircle, IconXCircle, IconMaximize, IconChevronRight, IconDollar, IconLock } from '../components/Icons';
 import { useAccounts } from '../contexts/AccountContext';
 import { getInitialTab, updateRoute } from '../utils/routing';
-import { formatDisplayName } from '../utils/formatter';
+import { formatDisplayName, truncateByWords } from '../utils/formatter';
 import { useUser } from '../contexts/UserContext';
+import { getStatusCapsuleClasses } from '../components/Badge';
 
 import PerformanceChart, { PerformanceMetric } from '../components/PerformanceChart';
 
@@ -31,6 +32,11 @@ interface AnalyticsProject {
     cancellation_reason?: string;
     [key: string]: any;
 }
+
+// Module-level cache — survives component unmount/remount within the same browser session.
+// Cleared automatically when the page is refreshed or the tab is closed.
+let _projectsCache: AnalyticsProject[] | null = null;
+let _metricsCache: PerformanceMetric[] | null = null;
 
 const Analytics: React.FC = () => {
     const { profile, hasPermission, effectiveRole } = useUser();
@@ -62,8 +68,8 @@ const Analytics: React.FC = () => {
     const [activeFilter, setActiveFilter] = useState<string | null>('month');
     const [searchQuery, setSearchQuery] = useState('');
     const [loading, setLoading] = useState(true);
-    const [projectsData, setProjectsData] = useState<AnalyticsProject[]>([]);
-    const [performanceMetricData, setPerformanceMetricData] = useState<PerformanceMetric[]>([]);
+    const [projectsData, setProjectsData] = useState<AnalyticsProject[]>(_projectsCache ?? []);
+    const [performanceMetricData, setPerformanceMetricData] = useState<PerformanceMetric[]>(_metricsCache ?? []);
     const [activeSummaryFilter, setActiveSummaryFilter] = useState<'pipeline' | 'secured' | 'cancelled'>(getInitialTab('Analytics', 'pipeline') as any);
     const [cancellationReasonModal, setCancellationReasonModal] = useState<{ isOpen: boolean; text: string }>({ isOpen: false, text: '' });
     const [metricsLoading, setMetricsLoading] = useState(true);
@@ -79,7 +85,6 @@ const Analytics: React.FC = () => {
         }
     }, [availableTabs, activeTab]);
 
-    const fetchedRef = useRef(false);
     const metricsInitialized = useRef(false);
     // Refs to always hold latest filter values — avoids stale closures without adding to dep arrays
     const fromDateRef = useRef(fromDate);
@@ -103,21 +108,9 @@ const Analytics: React.FC = () => {
         }
     }, [activeSummaryFilter, isProjectOpsManager]);
 
-    // Sync selectedAccount to ARS once accounts load — then immediately fetch metrics
-    useEffect(() => {
-        if (accountsLoading || accounts.length === 0) return;
-        if (selectedAccount === 'all') {
-            const ars = accounts.find(a => a.prefix?.toUpperCase() === 'ARS');
-            const id = ars ? ars.id : accounts[0].id;
-            selectedAccountRef.current = id; // update ref BEFORE fetch
-            setSelectedAccount(id);
-            fetchPerformanceMetrics(); // single fetch with correct account
-        }
-    }, [accountsLoading]);
 
     useEffect(() => {
-        if (fetchedRef.current) return;
-        fetchedRef.current = true;
+        if (!profile?.id) return;
 
         loadInitialData();
 
@@ -136,14 +129,18 @@ const Analytics: React.FC = () => {
         return () => {
             supabase.removeChannel(channel);
         };
-    }, []);
+    }, [profile?.id]);
 
     const loadInitialData = async () => {
-        await fetchProjects(true);
+        await Promise.all([
+            fetchProjects(true),
+            fetchPerformanceMetrics()
+        ]);
     };
 
 
     const fetchProjects = async (isInitial = false) => {
+        const t0 = performance.now();
         try {
             if (isInitial) setLoading(true);
 
@@ -152,10 +149,31 @@ const Analytics: React.FC = () => {
 
             let query = supabase
                 .from('projects')
-                .select('*, accounts(prefix, name), primary_manager:primary_manager_id(name)');
+                .select(`
+                    id,
+                    created_at,
+                    project_id,
+                    project_title,
+                    account_id,
+                    account,
+                    status,
+                    assignee,
+                    primary_manager_id,
+                    client_name,
+                    price,
+                    medium,
+                    items_sold,
+                    converted_by,
+                    cancellation_reason,
+                    accounts(prefix, name),
+                    primary_manager:primary_manager_id(name)
+                `);
 
             // Granular scoping for non-Super Admins
-            const isAdminLike = ['admin', 'project manager', 'project operations manager'].includes(userRole || '');
+            const isAdminLike = ['admin', 'project operations manager'].includes(userRole || '');
+            const isPM = userRole === 'project manager';
+            const isFreelancer = ['freelancer', 'designer', 'presentation'].some(r => userRole?.includes(r));
+
             if (isAdminLike && !isSuperAdmin) {
                 const { data: permittedAccounts } = await supabase
                     .from('user_account_access')
@@ -169,12 +187,52 @@ const Analytics: React.FC = () => {
                     setProjectsData([]);
                     return;
                 }
+            } else if (isPM) {
+                const { data: userTeams } = await supabase
+                    .from('team_members')
+                    .select('team_id')
+                    .eq('member_id', profile?.id);
+
+                if (userTeams && userTeams.length > 0) {
+                    const teamIds = userTeams.map(t => t.team_id);
+                    const { data: teamAccountLinks } = await supabase
+                        .from('team_accounts').select('account_id').in('team_id', teamIds);
+                    
+                    if (teamAccountLinks && teamAccountLinks.length > 0) {
+                        const accountIds = teamAccountLinks.map(ta => ta.account_id);
+                        query = query.in('account_id', accountIds);
+                    } else {
+                        setProjectsData([]);
+                        return;
+                    }
+                } else {
+                    setProjectsData([]);
+                    return;
+                }
+            } else if (isFreelancer) {
+                const freelancerName = profile?.name || profile?.email || '';
+                query = query.or(`assignee.eq."${freelancerName}",assignee.eq."${profile?.email}"`);
+            } else if (!isSuperAdmin) {
+                setProjectsData([]);
+                return;
+            }
+            // Apply server-side date filters to avoid fetching the entire table
+            if (fromDateRef.current) {
+                query = query.gte('created_at', fromDateRef.current.toISOString());
+            }
+            if (toDateRef.current) {
+                query = query.lte('created_at', toDateRef.current.toISOString());
             }
 
-            const { data, error } = await query.order('created_at', { ascending: false });
+            const tQuery = performance.now();
+            const { data, error } = await query
+                .order('created_at', { ascending: false })
+                .limit(2000);
+            console.log(`[Analytics] projects DB query: ${(performance.now() - tQuery).toFixed(0)}ms — ${data?.length ?? 0} rows`);
 
             if (error) throw error;
             if (data) {
+                const tMap = performance.now();
                 const enriched = data.map((p, index) => {
                     const createdAt = new Date(p.created_at || Date.now());
 
@@ -192,33 +250,52 @@ const Analytics: React.FC = () => {
                         }
                     }
 
+                    // Resolve account_id: use stored one, or fallback to looking up by account text/prefix OR Project ID prefix
+                    let resolvedAccountId = p.account_id;
+                    if (!resolvedAccountId) {
+                        const projectId = p.project_id || '';
+                        const prefixFromId = projectId.split(' ')[0]?.toUpperCase();
+                        const matchedAcc = (accounts || []).find(
+                            (a: any) =>
+                                a.prefix?.toUpperCase() === p.account?.toUpperCase() ||
+                                a.name === p.account ||
+                                (prefixFromId && a.prefix?.toUpperCase() === prefixFromId)
+                        );
+                        if (matchedAcc) resolvedAccountId = matchedAcc.id;
+                    }
+
                     return {
                         ...p,
                         day: new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(createdAt),
                         formattedDate: systemFormatDate(createdAt),
-                        account_name: p.accounts?.prefix?.toUpperCase() || '-',
+                        account_name: (Array.isArray(p.accounts) ? p.accounts[0] : p.accounts)?.prefix?.toUpperCase() || p.account?.toUpperCase() || '-',
                         project_id: p.project_id || '-',
                         project_title: p.project_title || '-',
                         sale: saleLabel,
                         medium: p.medium || '-',
                         price: Number(p.price || 0),
                         client: p.client_name || '-',
-                        agent: p.primary_manager?.name || p.assignee || '-',
+                        agent: (Array.isArray(p.primary_manager) ? p.primary_manager[0] : p.primary_manager)?.name || p.assignee || '-',
                         freelancer: p.assignee || '-',
                         cancellation_reason: p.cancellation_reason || '-',
+                        resolved_account_id: resolvedAccountId,
                     };
                 });
+                console.log(`[Analytics] JS enrichment map: ${(performance.now() - tMap).toFixed(0)}ms`);
+                _projectsCache = enriched;
                 setProjectsData(enriched);
             }
         } catch (err) {
             console.error('Error fetching analytics projects:', err);
         } finally {
             if (isInitial) setLoading(false);
+            console.log(`[Analytics] fetchProjects TOTAL: ${(performance.now() - t0).toFixed(0)}ms`);
         }
     };
 
 
     const fetchPerformanceMetrics = async () => {
+        const t0 = performance.now();
         try {
             setMetricsLoading(true);
             // Read from refs so we always get the latest values
@@ -244,8 +321,10 @@ const Analytics: React.FC = () => {
             }
 
             const { data, error } = await query;
+            console.log(`[Analytics] performance_metrics query: ${(performance.now() - t0).toFixed(0)}ms — ${data?.length ?? 0} rows`);
             if (error) throw error;
             if (data) {
+                _metricsCache = data as any;
                 setPerformanceMetricData(data as any);
             }
         } catch (err) {
@@ -283,6 +362,7 @@ const Analytics: React.FC = () => {
             setToDate(end);
             setActiveFilter(null);
             fetchPerformanceMetrics();
+            fetchProjects();
             return;
         }
 
@@ -311,31 +391,39 @@ const Analytics: React.FC = () => {
         setToDate(end);
         setActiveFilter(type);
         fetchPerformanceMetrics();
+        fetchProjects();
     };
 
     const handleAccountChange = (id: string) => {
         selectedAccountRef.current = id;
         setSelectedAccount(id);
         fetchPerformanceMetrics();
+        fetchProjects();
     };
 
     const handleExportCSV = () => {
         if (filteredProjects.length === 0) return;
 
-        const headers = ['S. No.', 'Day', 'Date', 'Account', 'Client', 'Sale', 'Medium', 'Price', 'Status'];
+        const headers = ['S. No.', 'Project ID', 'Account', 'Project Title', 'Day', 'Date', 'Assignee', 'Client', 'Agent', 'Converted By', 'Sale', 'Medium', 'Order Type', 'Price', 'Status'];
         const csvRows = [headers.join(',')];
 
         filteredProjects.forEach((p, idx) => {
             const row = [
                 idx + 1,
-                `"${p.day}"`,
-                `"${p.formattedDate}"`,
-                `"${p.account_name}"`,
-                `"${p.client}"`,
-                `"${p.sale}"`,
-                `"${p.medium}"`,
-                `"${p.price.toFixed(2)}"`,
-                `"${p.status}"`
+                `"${p.project_id || '-'}"`,
+                `"${p.account_name || '-'}"`,
+                `"${(p.project_title || '-').replace(/"/g, '""')}"`,
+                `"${p.day || '-'}"`,
+                `"${p.formattedDate || '-'}"`,
+                `"${p.freelancer || '-'}"`,
+                `"${(p.client || '-').replace(/"/g, '""')}"`,
+                `"${p.agent || '-'}"`,
+                `"${p.converted_by || '-'}"`,
+                `"${p.sale || '-'}"`,
+                `"${p.medium || '-'}"`,
+                `"${p.converted_by ? 'Converted' : 'Direct'}"`,
+                `"${(p.price || 0).toFixed(2)}"`,
+                `"${p.status || 'In Progress'}"`
             ];
             csvRows.push(row.join(','));
         });
@@ -365,25 +453,79 @@ const Analytics: React.FC = () => {
             });
         }
 
-        // 2. Account Filter
+        // 2. Account Filter — match by resolved_account_id (which includes fallback by text prefix)
         if (selectedAccount !== 'all') {
-            filtered = filtered.filter(p => p.account_id === selectedAccount);
+            filtered = filtered.filter(p => p.resolved_account_id === selectedAccount || p.account_id === selectedAccount);
         }
 
         // 3. Status Mapping Logic
+        // Pipeline = everything that is NOT Approved, NOT Cancelled (includes Done, Revision Done, etc.)
         if (activeSummaryFilter === 'pipeline') {
-            // In Progress
-            filtered = filtered.filter(p => p.status === 'In Progress' || (!p.status && p.action_move === 'Add'));
+            filtered = filtered.filter(p => p.status !== 'Approved' && p.status !== 'Cancelled' && p.status !== 'Removed');
         } else if (activeSummaryFilter === 'secured') {
-            // Approved
+            // Only explicitly Approved orders count as Secured Revenue
             filtered = filtered.filter(p => p.status === 'Approved');
         } else if (activeSummaryFilter === 'cancelled') {
-            // Cancelled
             filtered = filtered.filter(p => p.status === 'Cancelled');
         }
 
         return filtered;
     }, [projectsData, fromDate, toDate, selectedAccount, activeSummaryFilter]);
+
+    const reconciledMetrics = useMemo(() => {
+        if (!performanceMetricData || performanceMetricData.length === 0) return [];
+
+        // 1. Group and aggregate platform metrics by date
+        const dateGroups = new Map<string, any>();
+        performanceMetricData.forEach(m => {
+            const dateStr = m.date;
+            if (!dateGroups.has(dateStr)) {
+                dateGroups.set(dateStr, { ...m });
+            } else {
+                const existing = dateGroups.get(dateStr);
+                existing.impressions = (existing.impressions || 0) + (m.impressions || 0);
+                existing.clicks = (existing.clicks || 0) + (m.clicks || 0);
+                existing.orders = (existing.orders || 0) + (m.orders || 0);
+                existing.cancelled_orders = (existing.cancelled_orders || 0) + (m.cancelled_orders || 0);
+                existing.success_score = Math.max(existing.success_score || 0, m.success_score || 0);
+                existing.rating = Math.max(existing.rating || 0, m.rating || 0);
+            }
+        });
+
+        // 2. Count actual projects per date (Submission Reconciliation)
+        const projectStats = new Map<string, { total: number; cancelled: number }>();
+        projectsData.forEach(p => {
+            const dateStr = new Date(p.created_at).toISOString().split('T')[0];
+            if (selectedAccount !== 'all' && p.account_id !== selectedAccount) return;
+
+            const stats = projectStats.get(dateStr) || { total: 0, cancelled: 0 };
+            if (p.status !== 'Removed') {
+                stats.total++;
+                if (p.status === 'Cancelled') stats.cancelled++;
+            }
+            projectStats.set(dateStr, stats);
+        });
+
+        // 3. Final Reconciliation & Recalculation
+        return Array.from(dateGroups.values()).map(m => {
+            const stats = projectStats.get(m.date);
+            let orders = m.orders;
+            let cancelled = m.cancelled_orders;
+
+            if (stats) {
+                orders = stats.total;
+                cancelled = stats.cancelled;
+            }
+
+            return {
+                ...m,
+                orders,
+                cancelled_orders: cancelled,
+                conversion_rate: m.clicks > 0 ? (orders / m.clicks) * 100 : 0,
+                ctr: m.impressions > 0 ? (m.clicks / m.impressions) * 100 : 0
+            };
+        }).sort((a, b) => a.date.localeCompare(b.date));
+    }, [performanceMetricData, projectsData, selectedAccount]);
 
     const stats = useMemo(() => {
         let base = [...projectsData];
@@ -396,10 +538,11 @@ const Analytics: React.FC = () => {
             });
         }
         if (selectedAccount !== 'all') {
-            base = base.filter(p => p.account_id === selectedAccount);
+            base = base.filter(p => p.resolved_account_id === selectedAccount || p.account_id === selectedAccount);
         }
 
-        const pipeline = base.filter(p => p.status === 'In Progress' || (!p.status && p.action_move === 'Add'));
+        // Pipeline = NOT Approved, NOT Cancelled, NOT Removed — includes Done and all other active statuses
+        const pipeline = base.filter(p => p.status !== 'Approved' && p.status !== 'Cancelled' && p.status !== 'Removed');
         const secured = base.filter(p => p.status === 'Approved');
         const cancelled = base.filter(p => p.status === 'Cancelled');
 
@@ -468,9 +611,10 @@ const Analytics: React.FC = () => {
                 <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.05)_0%,transparent_70%)] pointer-events-none" />
 
                 <div className="p-3 relative z-10 w-full">
-                    <div className="w-full flex flex-col xl:flex-row items-center justify-between gap-4 py-1 px-2">
+                    <div className="w-full flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-4 py-1 px-2">
                         {/* Left Side: Date Pickers & Account */}
-                        <div className="flex flex-col md:flex-row items-center gap-3 w-full xl:w-auto">
+                        <div className="flex flex-col lg:flex-row items-stretch lg:items-center gap-3 w-full xl:w-auto">
+                            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
                             <DatePicker
                                 placeholder="From"
                                 value={fromDate}
@@ -479,16 +623,19 @@ const Analytics: React.FC = () => {
                                     setFromDate(date);
                                     setActiveFilter(null);
                                     fetchPerformanceMetrics();
+                                    fetchProjects();
                                 }}
                             >
-                                <div className="relative flex items-center gap-2 bg-black/40 border border-white/[0.05] rounded-xl pl-4 pr-2 py-2.5 text-sm font-bold text-white hover:bg-black/50 transition-all cursor-pointer group shadow-[inset_0_2px_8px_rgba(0,0,0,0.6)] overflow-hidden">
+                                <div className="relative flex items-center justify-between lg:justify-start gap-2 bg-black/40 border border-white/[0.05] rounded-xl pl-4 pr-2 py-2.5 text-sm font-bold text-white hover:bg-black/50 transition-all cursor-pointer group shadow-[inset_0_2px_8px_rgba(0,0,0,0.6)] overflow-hidden w-full lg:w-auto">
                                     {/* Inner Top Shadow for carved-in look */}
                                     <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-b from-black/60 to-transparent pointer-events-none" />
                                     {/* Subtle Diagonal Machined Sheen */}
                                     <div className="absolute inset-0 bg-[linear-gradient(135deg,transparent_0%,rgba(255,255,255,0.02)_48%,rgba(255,255,255,0.05)_50%,rgba(255,255,255,0.02)_52%,transparent_100%)] opacity-30 pointer-events-none" />
 
-                                    <IconCalendar className="w-4 h-4 text-brand-primary group-hover:scale-110 transition-transform relative z-10" />
-                                    <span className="min-w-20 relative z-10">{systemFormatDate(fromDate) || 'From Date'}</span>
+                                    <div className="flex items-center gap-2 relative z-10 shrink-0">
+                                        <IconCalendar className="w-4 h-4 text-brand-primary group-hover:scale-110 transition-transform relative z-10" />
+                                        <span className="min-w-20">{systemFormatDate(fromDate) || 'From Date'}</span>
+                                    </div>
                                     <div className="flex items-center gap-1.5 relative z-10">
                                         <svg className="w-4 h-4 text-gray-600 group-hover:text-gray-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
@@ -501,6 +648,7 @@ const Analytics: React.FC = () => {
                                                     fromDateRef.current = null;
                                                     setFromDate(null);
                                                     fetchPerformanceMetrics();
+                                                    fetchProjects();
                                                 }}
                                             >
                                                 <IconX className="w-3 h-3" strokeWidth={3} />
@@ -517,16 +665,19 @@ const Analytics: React.FC = () => {
                                     setToDate(date);
                                     setActiveFilter(null);
                                     fetchPerformanceMetrics();
+                                    fetchProjects();
                                 }}
                             >
-                                <div className="relative flex items-center gap-2 bg-black/40 border border-white/[0.05] rounded-xl pl-4 pr-2 py-2.5 text-sm font-bold text-white hover:bg-black/50 transition-all cursor-pointer group shadow-[inset_0_2px_8px_rgba(0,0,0,0.6)] overflow-hidden">
+                                <div className="relative flex items-center justify-between lg:justify-start gap-2 bg-black/40 border border-white/[0.05] rounded-xl pl-4 pr-2 py-2.5 text-sm font-bold text-white hover:bg-black/50 transition-all cursor-pointer group shadow-[inset_0_2px_8px_rgba(0,0,0,0.6)] overflow-hidden w-full lg:w-auto">
                                     {/* Inner Top Shadow for carved-in look */}
                                     <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-b from-black/60 to-transparent pointer-events-none" />
                                     {/* Subtle Diagonal Machined Sheen */}
                                     <div className="absolute inset-0 bg-[linear-gradient(135deg,transparent_0%,rgba(255,255,255,0.02)_48%,rgba(255,255,255,0.05)_50%,rgba(255,255,255,0.02)_52%,transparent_100%)] opacity-30 pointer-events-none" />
 
-                                    <IconCalendar className="w-4 h-4 text-brand-primary group-hover:scale-110 transition-transform relative z-10" />
-                                    <span className="min-w-20 relative z-10">{systemFormatDate(toDate) || 'To Date'}</span>
+                                    <div className="flex items-center gap-2 relative z-10 shrink-0">
+                                        <IconCalendar className="w-4 h-4 text-brand-primary group-hover:scale-110 transition-transform relative z-10" />
+                                        <span className="min-w-20">{systemFormatDate(toDate) || 'To Date'}</span>
+                                    </div>
                                     <div className="flex items-center gap-1.5 relative z-10">
                                         <svg className="w-4 h-4 text-gray-600 group-hover:text-gray-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
@@ -539,6 +690,7 @@ const Analytics: React.FC = () => {
                                                     toDateRef.current = null;
                                                     setToDate(null);
                                                     fetchPerformanceMetrics();
+                                                    fetchProjects();
                                                 }}
                                             >
                                                 <IconX className="w-3 h-3" strokeWidth={3} />
@@ -547,10 +699,11 @@ const Analytics: React.FC = () => {
                                     </div>
                                 </div>
                             </DatePicker>
+                            </div>
 
-                            <div className="h-8 w-px bg-white/10 mx-1 hidden sm:block" />
+                            <div className="h-8 w-px bg-white/10 mx-1 hidden lg:block" />
 
-                            <div className="w-44">
+                            <div className="w-full lg:w-44 lg:shrink-0">
                                 <Dropdown
                                     value={selectedAccount}
                                     onChange={(val) => handleAccountChange(val)}
@@ -577,7 +730,7 @@ const Analytics: React.FC = () => {
                         </div>
 
                         {/* Right: Actions */}
-                        <div className="flex items-center gap-2 w-full xl:w-auto justify-end overflow-visible">
+                        <div className="flex flex-wrap items-center gap-2 w-full xl:w-auto justify-center sm:justify-start xl:justify-end overflow-visible">
                             {[
                                 { id: 'today', label: 'Today' },
                                 { id: 'week', label: 'This Week' },
@@ -643,7 +796,7 @@ const Analytics: React.FC = () => {
                                         <p className={`text-xs font-bold uppercase tracking-widest mb-2 ${activeSummaryFilter === 'pipeline' ? 'text-white/80' : 'text-gray-400'}`}>Pipeline Revenue</p>
                                         <p className={`text-2xl font-black mb-1 ${activeSummaryFilter === 'pipeline' ? 'text-white' : 'text-brand-warning'}`}>${stats.pipelineRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                                         <div className="flex items-center gap-2 mt-1">
-                                            <span className={`inline-flex items-center px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase tracking-tighter ${activeSummaryFilter === 'pipeline' ? 'bg-white/20 border-white/30 text-white' : 'bg-brand-warning/10 border-brand-warning/20 text-brand-warning'}`}>
+                                            <span className={activeSummaryFilter === 'pipeline' ? 'inline-flex items-center px-3 py-1 rounded-md text-[10px] font-black uppercase tracking-wider bg-white/20 text-white' : getStatusCapsuleClasses('in progress')}>
                                                 {stats.pipelineCount} Projects
                                             </span>
                                             <span className={`text-[10px] font-bold uppercase tracking-widest ${activeSummaryFilter === 'pipeline' ? 'text-white/70' : 'text-gray-500 opacity-60'}`}>In Pipeline</span>
@@ -680,7 +833,7 @@ const Analytics: React.FC = () => {
                                         <p className={`text-xs font-bold uppercase tracking-widest mb-2 ${activeSummaryFilter === 'secured' ? 'text-white/80' : 'text-gray-400'}`}>Secured Revenue</p>
                                         <p className={`text-2xl font-black mb-1 ${activeSummaryFilter === 'secured' ? 'text-white' : 'text-brand-success'}`}>${stats.securedRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                                         <div className="flex items-center gap-2 mt-1">
-                                            <span className={`inline-flex items-center px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase tracking-tighter ${activeSummaryFilter === 'secured' ? 'bg-white/20 border-white/30 text-white' : 'bg-brand-success/10 border-brand-success/20 text-brand-success'}`}>
+                                            <span className={activeSummaryFilter === 'secured' ? 'inline-flex items-center px-3 py-1 rounded-md text-[10px] font-black uppercase tracking-wider bg-white/20 text-white' : getStatusCapsuleClasses('approved')}>
                                                 {stats.securedCount} Projects
                                             </span>
                                             <span className={`text-[10px] font-bold uppercase tracking-widest ${activeSummaryFilter === 'secured' ? 'text-white/70' : 'text-gray-500 opacity-60'}`}>Revenue Approved</span>
@@ -717,7 +870,7 @@ const Analytics: React.FC = () => {
                                         <p className={`text-xs font-bold uppercase tracking-widest mb-2 ${activeSummaryFilter === 'cancelled' ? 'text-white/80' : 'text-gray-400'}`}>Cancelled</p>
                                         <p className={`text-2xl font-black mb-1 ${activeSummaryFilter === 'cancelled' ? 'text-white' : 'text-brand-error'}`}>${stats.cancelledRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                                         <div className="flex items-center gap-2 mt-1">
-                                            <span className={`inline-flex items-center px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase tracking-tighter ${activeSummaryFilter === 'cancelled' ? 'bg-white/20 border-white/30 text-white' : 'bg-brand-error/10 border-brand-error/20 text-brand-error'}`}>
+                                            <span className={activeSummaryFilter === 'cancelled' ? 'inline-flex items-center px-3 py-1 rounded-md text-[10px] font-black uppercase tracking-wider bg-white/20 text-white' : getStatusCapsuleClasses('error')}>
                                                 {stats.cancelledCount} Projects
                                             </span>
                                             <span className={`text-[10px] font-bold uppercase tracking-widest ${activeSummaryFilter === 'cancelled' ? 'text-white/70' : 'text-gray-500 opacity-60'}`}>Revenue Cancelled</span>
@@ -750,11 +903,11 @@ const Analytics: React.FC = () => {
                                     key: 'project_id',
                                     className: 'whitespace-nowrap'
                                 },
+
                                 {
-                                    header: 'Project Title',
-                                    key: 'project_title',
-                                    className: 'font-bold max-w-[200px]',
-                                    render: (p) => <span className="text-white truncate block" title={p.project_title}>{p.project_title}</span>
+                                    header: 'Account',
+                                    key: 'account_name',
+                                    className: 'whitespace-nowrap font-bold text-brand-primary'
                                 },
                                 {
                                     header: 'Day',
@@ -765,8 +918,9 @@ const Analytics: React.FC = () => {
                                     key: 'formattedDate'
                                 },
                                 {
-                                    header: 'Freelancer',
-                                    key: 'freelancer'
+                                    header: 'Assignee',
+                                    key: 'freelancer',
+                                    render: (p: AnalyticsProject) => <span className="text-gray-300">{p.freelancer || '-'}</span>
                                 },
                                 {
                                     header: 'Client',
@@ -775,6 +929,11 @@ const Analytics: React.FC = () => {
                                 {
                                     header: 'Agent',
                                     key: 'agent'
+                                },
+                                {
+                                    header: 'Converted By',
+                                    key: 'converted_by',
+                                    render: (p) => <span className="text-gray-400">{p.converted_by || '-'}</span>
                                 },
                                 {
                                     header: 'Sale',
@@ -786,6 +945,12 @@ const Analytics: React.FC = () => {
                                     key: 'medium'
                                 },
                                 {
+                                    header: 'Order Type',
+                                    key: 'order_type',
+                                    className: 'whitespace-nowrap min-w-[120px]',
+                                    render: (p) => <span className="text-gray-400 font-medium">{p.converted_by ? 'Converted' : 'Direct'}</span>
+                                },
+                                {
                                     header: 'Price',
                                     key: 'price',
                                     className: 'text-right',
@@ -795,18 +960,10 @@ const Analytics: React.FC = () => {
                                     header: 'Status',
                                     key: 'status',
                                     render: (p) => {
-                                        let statusLabel = p.status || 'In Progress';
-                                        let colorClass = 'bg-brand-warning/10 border-brand-warning/20 text-brand-warning';
-
-                                        if (statusLabel === 'Approved') {
-                                            colorClass = 'bg-brand-success/10 border-brand-success/20 text-brand-success';
-                                        } else if (statusLabel === 'Cancelled') {
-                                            colorClass = 'bg-brand-error/10 border-brand-error/20 text-brand-error';
-                                        }
-
+                                        const status = p.status || 'In Progress';
                                         return (
-                                            <span className={`inline-flex items-center px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase tracking-tighter ${colorClass}`}>
-                                                {statusLabel}
+                                            <span className={getStatusCapsuleClasses(status)}>
+                                                {status}
                                             </span>
                                         );
                                     }
@@ -844,7 +1001,7 @@ const Analytics: React.FC = () => {
                 </>
             ) : (
                 <div className="space-y-6">
-                    <PerformanceChart data={performanceMetricData} isLoading={metricsLoading} />
+                    <PerformanceChart data={reconciledMetrics} isLoading={metricsLoading} />
 
                     {/* Detailed Metrics Table */}
                     <div className="space-y-4">
@@ -909,7 +1066,7 @@ const Analytics: React.FC = () => {
                                     render: (row) => <span className="text-sm text-gray-300">{formatDisplayName(row.profiles?.name) || '—'}</span>
                                 },
                             ]}
-                            data={[...performanceMetricData].reverse()}
+                            data={[...reconciledMetrics].reverse()}
                             isLoading={metricsLoading}
                             isMetallicHeader={true}
                         />

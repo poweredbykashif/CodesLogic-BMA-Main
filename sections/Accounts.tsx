@@ -9,6 +9,7 @@ import { supabase } from '../lib/supabase';
 import { useAccounts } from '../contexts/AccountContext';
 import { useUser } from '../contexts/UserContext';
 import { addToast } from '../components/Toast';
+import { getAccountCapsuleClasses, getStatusCapsuleClasses } from '../components/Badge';
 
 interface Account {
     id: string;
@@ -122,8 +123,8 @@ const Accounts: React.FC = () => {
                 title: 'Account Deleted',
                 message: `Account "${selectedAccount.name}" removed successfully.`
             });
+            await fetchAccounts();
             setIsDeleteModalOpen(false);
-            // Account list will refresh via context real-time subscription
         } catch (error: any) {
             console.error('Supabase deletion error:', error);
             addToast({
@@ -160,7 +161,7 @@ const Accounts: React.FC = () => {
                 header: 'Prefix',
                 key: 'prefix',
                 render: (item: any) => (
-                    <span className="font-semibold text-white/90">{item.prefix || '-'}</span>
+                    <span className={getAccountCapsuleClasses()}>{item.prefix || '-'}</span>
                 )
             },
             {
@@ -169,8 +170,7 @@ const Accounts: React.FC = () => {
                 render: (item: any) => {
                     const status = item.status || 'Active';
                     return (
-                        <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider ${status === 'Active' ? 'bg-brand-success/10 text-brand-success' : 'bg-brand-warning/10 text-brand-warning'
-                            }`}>
+                        <span className={getStatusCapsuleClasses(status)}>
                             {status}
                         </span>
                     );

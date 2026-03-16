@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, ElevatedMetallicCard, Tooltip, Modal } from '../components/Surfaces';
 import { Table } from '../components/Table';
 import { Avatar } from '../components/Avatar';
@@ -27,11 +27,16 @@ import { useAccounts } from '../contexts/AccountContext';
 import { addToast } from '../components/Toast';
 import { getInitialTab, updateRoute } from '../utils/routing';
 
+// Module-level cache — survives component unmount/remount within the same browser session.
+// Cleared automatically when the page is refreshed or the tab is closed.
+let _earningsCache: any[] | null = null;
+let _releaseLogsCache: any[] | null = null;
+
 const Earnings: React.FC = () => {
     const [loading, setLoading] = useState(true);
-    const [earningsData, setEarningsData] = useState<any[]>([]);
+    const [earningsData, setEarningsData] = useState<any[]>(_earningsCache ?? []);
     const [filteredData, setFilteredData] = useState<any[]>([]);
-    const [releaseLogs, setReleaseLogs] = useState<any[]>([]);
+    const [releaseLogs, setReleaseLogs] = useState<any[]>(_releaseLogsCache ?? []);
     const [dateFrom, setDateFrom] = useState<Date | null>(null);
     const [dateTo, setDateTo] = useState<Date | null>(null);
     const [selectedAccount, setSelectedAccount] = useState<string>('all');
@@ -43,7 +48,6 @@ const Earnings: React.FC = () => {
     const { profile, loading: userLoading, effectiveRole } = useUser();
     const isAdmin = effectiveRole === 'Admin' || effectiveRole === 'Super Admin';
     const isFreelancer = effectiveRole === 'Freelancer';
-    const fetchedRef = useRef(false);
 
     useEffect(() => {
         if (!userLoading && profile?.email) {
@@ -118,6 +122,7 @@ const Earnings: React.FC = () => {
                         daysLeft: daysLeft
                     };
                 });
+                _earningsCache = formatted;
                 setEarningsData(formatted);
             }
         } catch (err) {
@@ -138,6 +143,7 @@ const Earnings: React.FC = () => {
                 .order('release_date', { ascending: false });
 
             if (!error && data) {
+                _releaseLogsCache = data;
                 setReleaseLogs(data);
             }
         } catch (err) {
@@ -421,11 +427,11 @@ const Earnings: React.FC = () => {
                                 key: 'funds_status',
                                 render: (item: any) => {
                                     if (activeSummaryFilter === 'pending') {
-                                        return <span className="bg-brand-warning/10 text-brand-warning border border-brand-warning/20 px-2 py-0.5 rounded-md text-[10px] font-bold">{item.daysLeft || 0} Days</span>;
+                                        return <span className="bg-amber-600/20 text-amber-600 px-3 py-1 rounded-md text-[10px] font-black uppercase tracking-wider">{item.daysLeft || 0} Days</span>;
                                     }
                                     const status = activeSummaryFilter === 'available' ? 'Unpaid' : item.funds_status;
                                     const isSuccess = status === 'Cleared' || status === 'Paid';
-                                    return <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider ${isSuccess ? 'bg-brand-success/10 text-brand-success border border-brand-success/20' : 'bg-brand-warning/10 text-brand-warning border border-brand-warning/20'}`}>{status}</span>;
+                                    return <span className={`px-3 py-1 rounded-md text-[10px] font-black uppercase tracking-wider whitespace-nowrap ${isSuccess ? 'bg-green-600/20 text-green-600' : 'bg-amber-600/20 text-amber-600'}`}>{status}</span>;
                                 }
                             },
                             { header: 'Payout', key: 'amount', className: 'text-right', render: (item: any) => <span className="text-brand-success font-bold">{item.amount}</span> }

@@ -12,10 +12,17 @@ const Toast: React.FC<ToastProps> = ({ toast, onClose }) => {
   const [isVisible, setIsVisible] = useState(false);
 
   useEffect(() => {
+    // Play default toast sound if not silent
+    if (!toast.silent) {
+      const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2354/2354-preview.mp3'); // Standard bip
+      audio.volume = 0.4;
+      audio.play().catch(e => console.warn('Toast sound play failed:', e));
+    }
+
     // Start animation almost immediately
     const timer = setTimeout(() => setIsVisible(true), 10);
     return () => clearTimeout(timer);
-  }, []);
+  }, [toast.silent]);
 
   const handleClose = useCallback(() => {
     setIsVisible(false);

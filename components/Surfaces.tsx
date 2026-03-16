@@ -70,6 +70,8 @@ interface ModalProps {
   size?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
   hideHeader?: boolean;
   isElevatedFooter?: boolean;
+  isElevatedHeader?: boolean;
+  closeOnOutsideClick?: boolean;
 }
 
 export const Modal: React.FC<ModalProps> = ({
@@ -80,7 +82,9 @@ export const Modal: React.FC<ModalProps> = ({
   footer,
   size = 'md',
   hideHeader = false,
-  isElevatedFooter = false
+  isElevatedFooter = false,
+  isElevatedHeader = false,
+  closeOnOutsideClick = true
 }) => {
   if (!isOpen) return null;
 
@@ -97,7 +101,7 @@ export const Modal: React.FC<ModalProps> = ({
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/80 backdrop-blur-sm animate-in fade-in duration-300"
-        onClick={onClose}
+        onClick={closeOnOutsideClick ? onClose : undefined}
       />
 
       {/* Modal Container */}
@@ -105,11 +109,23 @@ export const Modal: React.FC<ModalProps> = ({
 
         {/* Header - Sticky with enhanced desktop spacing */}
         {!hideHeader && (
-          <div className="flex items-center justify-between px-8 py-6 lg:px-10 lg:py-8 border-b border-white/[0.05] bg-white/[0.02] rounded-t-3xl shrink-0">
-            <h2 className="text-xl font-bold text-white tracking-tight">{title}</h2>
+          <div className={`flex items-center justify-between px-8 py-6 lg:px-10 lg:py-8 border-b border-white/[0.05] relative overflow-hidden shrink-0 ${isElevatedHeader ? 'bg-white/[0.03] rounded-t-3xl' : 'bg-white/[0.02] rounded-t-3xl'}`}>
+            {isElevatedHeader && (
+              <>
+                {/* Full Surface Metallic Shine */}
+                <div className="absolute inset-0 bg-[linear-gradient(115deg,rgba(255,255,255,0.02)_0%,rgba(255,255,255,0.05)_40%,rgba(255,255,255,0.1)_50%,rgba(255,255,255,0.05)_60%,rgba(255,255,255,0.02)_100%)] pointer-events-none opacity-40" />
+                <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.05)_0%,transparent_70%)] pointer-events-none" />
+
+                {/* Center-weighted Shadow Depth Falloff */}
+                <div className="absolute -bottom-px left-1/2 -translate-x-1/2 w-4/5 h-12 [mask-image:linear-gradient(to_right,transparent,black_20%,black_80%,transparent)] -z-10 pointer-events-none">
+                  <div className="w-full h-full shadow-[0_12px_32px_-8px_rgba(0,0,0,0.9)] opacity-80" />
+                </div>
+              </>
+            )}
+            <h2 className="relative z-10 text-xl font-bold text-white tracking-tight">{title}</h2>
             <button
               onClick={onClose}
-              className="p-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all duration-200 active:scale-95"
+              className="relative z-10 p-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all duration-200 active:scale-95"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
@@ -185,9 +201,9 @@ export const SuccessModal: React.FC<SuccessModalProps> = ({
 
         <div className="flex flex-col w-full gap-3">
           <Button
-            variant="primary"
+            variant="metallic"
             onClick={primaryAction.onClick}
-            className="w-full py-4 text-base font-bold shadow-lg shadow-brand-success/5"
+            className="w-full py-4 text-base font-bold"
           >
             {primaryAction.label}
           </Button>

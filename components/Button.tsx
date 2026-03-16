@@ -1,7 +1,7 @@
 import React from 'react';
 import { ButtonProps } from '../types';
 
-const baseStyles = 'relative overflow-hidden flex items-center justify-center whitespace-nowrap font-medium transition-all duration-300 ease-out outline-none focus:ring-0 ring-0 focus-visible:outline-none focus-visible:ring-0 active:outline-none select-none disabled:opacity-50 disabled:cursor-not-allowed rounded-xl box-border transform-gpu';
+const baseStyles = 'relative overflow-hidden flex items-center justify-center whitespace-nowrap font-medium transition-[background-color,color,opacity,transform,filter,backdrop-filter] duration-300 ease-out outline-none focus:ring-0 ring-0 focus-visible:outline-none focus-visible:ring-0 active:outline-none select-none disabled:opacity-50 disabled:cursor-not-allowed rounded-xl box-border transform-gpu';
 
 const variants = {
   // Primary: Enhanced hover with subtle lift and glow shadow
@@ -17,7 +17,7 @@ const variants = {
   error: 'bg-brand-error text-white border border-transparent hover:brightness-110 hover:shadow-lg hover:shadow-brand-error/20',
   success: 'bg-brand-success text-white border border-transparent hover:brightness-110 hover:shadow-lg hover:shadow-brand-success/20',
   // Recessed: Deep sunken/machined look (Nova Recessed)
-  recessed: 'bg-black/40 text-gray-400 border border-white/[0.05] shadow-[inset_0_2px_8px_rgba(0,0,0,0.4)] hover:bg-black/50 hover:text-white transition-all',
+  recessed: 'bg-black/40 text-gray-400 border border-white/[0.05] shadow-[inset_0_2px_8px_rgba(0,0,0,0.4)] hover:bg-black/50 hover:text-white transition-all focus:outline-none focus:border-white/[0.05] focus:shadow-[inset_0_2px_8px_rgba(0,0,0,0.4)]',
   // Metallic Error: Premium red variant with same effect
   'metallic-error': 'relative overflow-hidden bg-gradient-to-b from-[#EF4444] to-[#991B1B] text-white border border-[#B91C1C] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_-1px_0_rgba(0,0,0,0.2)] hover:brightness-[1.1] hover:-translate-y-0.5 hover:shadow-[inset_0_1.5px_0_rgba(255,255,255,0.5),inset_0_-1px_0_rgba(0,0,0,0.25)] active:translate-y-0 active:brightness-[0.95] active:shadow-inner',
 };

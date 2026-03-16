@@ -29,6 +29,13 @@ export const ReminderOverlay: React.FC = () => {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
     const [userId, setUserId] = useState<string | null>(null);
+    const [isSoundEnabled, setIsSoundEnabled] = useState(() => {
+        if (typeof window !== 'undefined') {
+            const saved = localStorage.getItem('nova_reminders_sound_enabled');
+            return saved === null ? true : saved === 'true';
+        }
+        return true;
+    });
 
     // Track last trigger time for each reminder in memory
     const lastTriggerRef = useRef<{ [key: string]: number }>({});
@@ -55,6 +62,20 @@ export const ReminderOverlay: React.FC = () => {
         });
 
         return () => subscription.unsubscribe();
+    }, []);
+
+    // 1.1 Sync settings
+    useEffect(() => {
+        const handleSync = () => {
+            const saved = localStorage.getItem('nova_reminders_sound_enabled');
+            setIsSoundEnabled(saved === null ? true : saved === 'true');
+        };
+        window.addEventListener('nova_reminders_sound_updated', handleSync);
+        window.addEventListener('storage', handleSync);
+        return () => {
+            window.removeEventListener('nova_reminders_sound_updated', handleSync);
+            window.removeEventListener('storage', handleSync);
+        };
     }, []);
 
     // 2. Fetch and Subscribe to Reminders
@@ -120,16 +141,11 @@ export const ReminderOverlay: React.FC = () => {
     }, [userId]);
 
     const playAlertSound = () => {
-        if (audioRef.current) {
+        if (audioRef.current && isSoundEnabled) {
             console.log('🎵 ReminderOverlay: Playing alert sound...');
             audioRef.current.currentTime = 0;
             audioRef.current.play().catch(err => {
                 console.warn('🔇 ReminderOverlay: Browser blocked auto-play. User interaction needed.', err);
-                addToast({
-                    type: 'info',
-                    title: 'Audio Enabled',
-                    message: 'Please click anywhere on the page to enable reminder sounds.'
-                });
             });
         }
     };
@@ -308,9 +324,8 @@ export const ReminderOverlay: React.FC = () => {
                             <Button
                                 variant="primary"
                                 size="md"
-                                fullWidth
                                 onClick={handleRespond}
-                                className="shadow-lg shadow-brand-primary/20"
+                                className="w-full shadow-lg shadow-brand-primary/20"
                             >
                                 Respond Now
                             </Button>

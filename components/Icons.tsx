@@ -141,6 +141,24 @@ export const IconBriefcase: React.FC<IconProps> = (props) => (
 
 // --- UI ACTIONS ---
 
+export const IconBrush: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <path d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08" />
+    <path d="M7.07 14.94c-3.91 3.91-5.03 5.02-5.03 5.02L2 22l2.04-.04s1.11-1.12 5.02-5.03" />
+    <path d="m18 7 3 3" />
+  </IconBase>
+);
+
+export const IconPen: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <path d="M12 19l7-7 3 3-7 7-3-3z" />
+    <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
+    <path d="m2 2 5 2" />
+    <path d="m2 2 2 5" />
+    <path d="m2 2 5 5" />
+  </IconBase>
+);
+
 export const IconPlus: React.FC<IconProps> = (props) => (
   <IconBase {...props}>
     <line x1="12" y1="5" x2="12" y2="19" />
@@ -238,6 +256,21 @@ export const IconLink: React.FC<IconProps> = (props) => (
   <IconBase {...props}>
     <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
     <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+  </IconBase>
+);
+
+export const IconSave: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+    <polyline points="17 21 17 13 7 13 7 21" />
+    <polyline points="7 3 7 8 15 8" />
+  </IconBase>
+);
+
+export const IconRotateCcw: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <path d="M1 4v6h6" />
+    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
   </IconBase>
 );
 
@@ -345,6 +378,24 @@ export const IconChevronDown: React.FC<IconProps> = (props) => (
   </IconBase>
 );
 
+// --- NEW ICONS ---
+
+export const IconArrowRight: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <line x1="5" y1="12" x2="19" y2="12" />
+    <polyline points="12 5 19 12 12 19" />
+  </IconBase>
+);
+
+export const IconUserPlus: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <line x1="19" y1="8" x2="19" y2="14" />
+    <line x1="22" y1="11" x2="16" y2="11" />
+  </IconBase>
+);
+
 export const IconMaximize: React.FC<IconProps> = (props) => (
   <IconBase {...props}>
     <path d="M15 3h6v6" />
@@ -368,6 +419,19 @@ export const IconBuilding: React.FC<IconProps> = (props) => (
   </IconBase>
 );
 
+export const IconBank: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <path d="M3 21h18" />
+    <path d="M3 10h18" />
+    <path d="m5 6 7-3 7 3" />
+    <path d="M4 10v11" />
+    <path d="M20 10v11" />
+    <path d="M8 14v3" />
+    <path d="M12 14v3" />
+    <path d="M16 14v3" />
+  </IconBase>
+);
+
 export const IconBox: React.FC<IconProps> = (props) => (
   <IconBase {...props}>
     <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
@@ -380,6 +444,14 @@ export const IconLayoutSidebar: React.FC<IconProps> = (props) => (
   <IconBase {...props}>
     <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
     <line x1="9" y1="3" x2="9" y2="21" />
+  </IconBase>
+);
+
+export const IconMenu: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <line x1="3" y1="12" x2="21" y2="12" />
+    <line x1="3" y1="6" x2="21" y2="6" />
+    <line x1="3" y1="18" x2="21" y2="18" />
   </IconBase>
 );
 
@@ -488,6 +560,15 @@ export const IconUnlock: React.FC<IconProps> = (props) => (
   </IconBase>
 );
 
+export const IconExternalLink: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+    <polyline points="15 3 21 3 21 9" />
+    <line x1="10" y1="14" x2="21" y2="3" />
+  </IconBase>
+);
+
+
 export const IconDatabase: React.FC<IconProps> = (props) => (
   <IconBase {...props}>
     <ellipse cx="12" cy="5" rx="9" ry="3" />
@@ -509,6 +590,12 @@ export const IconChartLine: React.FC<IconProps> = (props) => (
   </IconBase>
 );
 
+export const IconActivity: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+  </IconBase>
+);
+
 export const IconTrendingDown: React.FC<IconProps> = (props) => (
   <IconBase {...props}>
     <polyline points="23 18 13.5 8.5 8.5 13.5 1 6" />
@@ -516,9 +603,203 @@ export const IconTrendingDown: React.FC<IconProps> = (props) => (
   </IconBase>
 );
 
+export const IconCpu: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <rect x="4" y="4" width="16" height="16" rx="2" />
+    <rect x="9" y="9" width="6" height="6" />
+    <path d="M15 2v2" />
+    <path d="M15 20v2" />
+    <path d="M2 15h2" />
+    <path d="M2 9h2" />
+    <path d="M20 15h2" />
+    <path d="M20 9h2" />
+    <path d="M9 2v2" />
+    <path d="M9 20v2" />
+  </IconBase>
+);
+
+export const IconLayers: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <polygon points="12 2 2 7 12 12 22 7 12 2" />
+    <polyline points="2 17 12 22 22 17" />
+    <polyline points="2 12 12 17 22 12" />
+  </IconBase>
+);
+
+export const IconCode: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <polyline points="16 18 22 12 16 6" />
+    <polyline points="8 6 2 12 8 18" />
+  </IconBase>
+);
+
+export const IconTerminal: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <polyline points="4 17 10 11 4 5" />
+    <line x1="12" y1="19" x2="20" y2="19" />
+  </IconBase>
+);
+
+export const IconZap: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+  </IconBase>
+);
+
+
 export const IconMapPin: React.FC<IconProps> = (props) => (
   <IconBase {...props}>
     <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
     <circle cx="12" cy="10" r="3" />
+  </IconBase>
+);
+
+export const IconStar: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+  </IconBase>
+);
+
+export const IconAward: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <circle cx="12" cy="8" r="7" />
+    <polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88" />
+  </IconBase>
+);
+
+export const IconRosette: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14l-5-4.87 6.91-1.01L12 2z" />
+    <path d="m9 12 2 2 4-4" />
+  </IconBase>
+);
+
+export const IconShieldNew: React.FC<IconProps> = (props) => (
+  <IconBase viewBox="0 0 24 24" stroke="none" {...props}>
+    <defs>
+      <linearGradient id="grad-shield-new" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stopColor="#26d9b3" />
+        <stop offset="100%" stopColor="#16a085" />
+      </linearGradient>
+    </defs>
+    <path d="M4 3h16v11l-8 5-8-5V3z" fill="url(#grad-shield-new)" />
+    <path d="M4 3h16v0.5H4V3z" fill="white" fillOpacity="0.4" />
+    <path d="M4 3v11l8 5 8-5V3H4zM5 4h14v9.5l-7 4.3-7-4.3V4z" fill="black" fillOpacity="0.1" />
+  </IconBase>
+);
+
+export const IconShieldTopRated: React.FC<IconProps> = (props) => (
+  <IconBase viewBox="0 0 24 24" stroke="none" {...props}>
+    <defs>
+      <linearGradient id="grad-shield-tr-light" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stopColor="#5dade2" />
+        <stop offset="100%" stopColor="#3498db" />
+      </linearGradient>
+      <linearGradient id="grad-shield-tr-dark" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stopColor="#3498db" />
+        <stop offset="100%" stopColor="#2980b9" />
+      </linearGradient>
+    </defs>
+    <path d="M4 3h16v11l-8 5-8-5V3z" fill="url(#grad-shield-tr-dark)" />
+    <path d="M20 3L4 3V13.5L12 18.5z" fill="url(#grad-shield-tr-light)" />
+    <path d="M20 3L4 3L20 13V3z" fill="white" fillOpacity="0.3" />
+    <path d="M4 3h16v0.5H4V3z" fill="white" fillOpacity="0.5" />
+  </IconBase>
+);
+
+export const IconShieldTopRatedPlus: React.FC<IconProps> = (props) => (
+  <IconBase viewBox="0 0 24 24" stroke="none" {...props}>
+    <defs>
+      <linearGradient id="grad-shield-trp-1" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stopColor="#f48fb1" />
+        <stop offset="100%" stopColor="#e91e63" />
+      </linearGradient>
+      <linearGradient id="grad-shield-trp-2" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stopColor="#f06292" />
+        <stop offset="100%" stopColor="#d81b60" />
+      </linearGradient>
+    </defs>
+    <path d="M4 3h16v11l-8 5-8-5V3z" fill="url(#grad-shield-trp-1)" />
+    <path d="M4 3L12 8L20 3H4z" fill="white" fillOpacity="0.3" />
+    <path d="M4 3L12 8V19L4 14V3z" fill="white" fillOpacity="0.1" />
+    <path d="M4 3h16v0.5H4V3z" fill="white" fillOpacity="0.5" />
+  </IconBase>
+);
+
+export const IconShieldExpert: React.FC<IconProps> = (props) => (
+  <IconBase viewBox="0 0 24 24" stroke="none" {...props}>
+    <defs>
+      <linearGradient id="grad-shield-expert" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stopColor="#f4d03f" />
+        <stop offset="100%" stopColor="#f1c40f" />
+      </linearGradient>
+    </defs>
+    <path d="M4 3h16v11l-8 5-8-5V3z" fill="url(#grad-shield-expert)" />
+    <path d="M4 3h16v0.5H4V3z" fill="white" fillOpacity="0.6" />
+    <path d="M12 6.2l1.24 2.51 2.77.4-2.01 1.96.47 2.76-2.47-1.3-2.47 1.3.47-2.76-2.01-1.96 2.77-.4L12 6.2z" fill="white" />
+    <path d="M4 3v11l8 5 8-5V3H4zM5 4h14v9.5l-7 4.3-7-4.3V4z" fill="black" fillOpacity="0.1" />
+  </IconBase>
+);
+
+export const IconPlay: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <polygon points="5 3 19 12 5 21 5 3" />
+  </IconBase>
+);
+export const IconVolumeHigh: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <path d="M11 5L6 9H2v6h4l5 4V5zM15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14" />
+  </IconBase>
+);
+
+export const IconVolumeMute: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <path d="M11 5L6 9H2v6h4l5 4V5zM23 9l-6 6M17 9l6 6" />
+  </IconBase>
+);
+
+export const IconStop: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+  </IconBase>
+);
+
+export const IconAlertCircle: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <circle cx="12" cy="12" r="10" />
+    <line x1="12" y1="8" x2="12" y2="12" />
+    <line x1="12" y1="16" x2="12.01" y2="16" />
+  </IconBase>
+);
+
+export const IconUserCircle: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" />
+    <path d="M12 10m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0" />
+    <path d="M6.168 18.849a4 4 0 0 1 3.832 -2.849h4a4 0 0 1 3.834 2.855" />
+  </IconBase>
+);
+
+export const IconFolder: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <path d="M5 19h14a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.382l-2-2H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2z" />
+  </IconBase>
+);
+
+export const IconApplicant: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <rect x="3" y="3" width="18" height="18" rx="4" />
+    <circle cx="12" cy="10" r="3" />
+    <path d="M7 18c0-2 2-3.5 5-3.5s5 1.5 5 3.5" />
+  </IconBase>
+);
+
+export const IconTicket: React.FC<IconProps> = (props) => (
+  <IconBase {...props}>
+    <path d="M2 9V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 0 0 4v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4a2 2 0 0 0 0-4Z" />
+    <path d="M13 3v2" />
+    <path d="M13 8v2" />
+    <path d="M13 14v2" />
+    <path d="M13 19v2" />
   </IconBase>
 );

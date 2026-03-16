@@ -21,32 +21,47 @@ import {
     IconMaximize,
     IconBuilding,
     IconUser,
+    IconBank,
 } from '../components/Icons';
-import { Badge } from '../components/Badge';
+import { Badge, RoleCapsule, getStatusCapsuleClasses } from '../components/Badge';
 import { Modal, Card, ElevatedMetallicCard } from '../components/Surfaces';
 import { addToast } from '../components/Toast';
 import { formatDisplayName } from '../utils/formatter';
+import { useUser } from '../contexts/UserContext';
 
 interface UserDetailsProps {
     userId: string;
     onBack: () => void;
     onStatusChange?: () => void;
+    onPreviewV2?: () => void;
 }
 
-const UserDetails: React.FC<UserDetailsProps> = ({ userId, onBack, onStatusChange }) => {
-    const [user, setUser] = useState<any>(null);
-    const [loading, setLoading] = useState(true);
+const UserDetails: React.FC<UserDetailsProps> = ({ userId, onBack, onStatusChange, onPreviewV2 }) => {
+    const { effectiveRole } = useUser();
+    const [user, setUser] = useState<any>(() => {
+        const cachedUsers = localStorage.getItem('nova_users_cache');
+        if (cachedUsers) {
+            const users = JSON.parse(cachedUsers);
+            return users.find((u: any) => u.id === userId) || null;
+        }
+        return null;
+    });
+    const [loading, setLoading] = useState(!user);
     const [updating, setUpdating] = useState(false);
     const [isAvatarUploading, setIsAvatarUploading] = useState(false);
+    const [isCNICUploading, setIsCNICUploading] = useState<{ front: boolean, back: boolean }>({ front: false, back: false });
     const [previewImage, setPreviewImage] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const cnicFileInputRef = useRef<HTMLInputElement>(null);
+    const [uploadingSide, setUploadingSide] = useState<'front' | 'back' | null>(null);
+    const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 
     useEffect(() => {
         fetchUserDetails();
     }, [userId]);
 
     const fetchUserDetails = async () => {
-        setLoading(true);
+        if (!user) setLoading(true); // Only show spinner if we don't have cached data
         try {
             const { data, error } = await supabase
                 .from('profiles')
@@ -56,6 +71,17 @@ const UserDetails: React.FC<UserDetailsProps> = ({ userId, onBack, onStatusChang
 
             if (error) throw error;
             setUser(data);
+
+            // Sync this specific user back into the general users cache
+            const cachedUsers = localStorage.getItem('nova_users_cache');
+            if (cachedUsers) {
+                const users = JSON.parse(cachedUsers);
+                const index = users.findIndex((u: any) => u.id === userId);
+                if (index !== -1) {
+                    users[index] = { ...users[index], ...data };
+                    localStorage.setItem('nova_users_cache', JSON.stringify(users));
+                }
+            }
         } catch (error: any) {
             console.error('Error fetching user details:', error);
             addToast({ type: 'error', title: 'Error', message: 'Could not load user details.' });
@@ -102,18 +128,20 @@ const UserDetails: React.FC<UserDetailsProps> = ({ userId, onBack, onStatusChang
         }
     };
 
-    const handleDeleteUser = async () => {
-        if (!window.confirm('Are you sure you want to permanently delete this user? This action cannot be undone.')) return;
+    const handleDeleteUser = () => {
+        setIsDeleteModalOpen(true);
+    };
 
+    const executeDeleteUser = async () => {
         setUpdating(true);
         try {
-            const { error } = await supabase
-                .from('profiles')
-                .delete()
-                .eq('id', userId);
+            const { error } = await supabase.rpc('delete_user_entirely', {
+                target_user_id: userId
+            });
 
             if (error) throw error;
             addToast({ type: 'success', title: 'User Deleted', message: 'The user account has been permanently removed.' });
+            setIsDeleteModalOpen(false);
             onBack();
         } catch (error: any) {
             addToast({ type: 'error', title: 'Delete Failed', message: error.message });
@@ -156,12 +184,81 @@ const UserDetails: React.FC<UserDetailsProps> = ({ userId, onBack, onStatusChang
             if (updateError) throw updateError;
 
             setUser({ ...user, avatar_url: publicUrl });
+
+            // Sync this specific user back into the general users cache
+            const cachedUsers = localStorage.getItem('nova_users_cache');
+            if (cachedUsers) {
+                const users = JSON.parse(cachedUsers);
+                const index = users.findIndex((u: any) => u.id === userId);
+                if (index !== -1) {
+                    users[index] = { ...users[index], avatar_url: publicUrl };
+                    localStorage.setItem('nova_users_cache', JSON.stringify(users));
+                }
+            }
+
             addToast({ type: 'success', title: 'Avatar Updated', message: 'Profile picture has been updated successfully.' });
         } catch (error: any) {
             console.error('Error updating avatar:', error);
             addToast({ type: 'error', title: 'Upload Failed', message: error.message });
         } finally {
             setIsAvatarUploading(false);
+        }
+    };
+
+    const handleCNICClick = (side: 'front' | 'back') => {
+        setUploadingSide(side);
+        cnicFileInputRef.current?.click();
+    };
+
+    const handleCNICFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file || !uploadingSide) return;
+
+        setIsCNICUploading(prev => ({ ...prev, [uploadingSide]: true }));
+        try {
+            const fileName = `${userId}-cnic-${uploadingSide}-${Math.random().toString(36).substring(2, 7)}.${file.name.split('.').pop()}`;
+
+            const { error: uploadError } = await supabase.storage
+                .from('documents')
+                .upload(fileName, file);
+
+            if (uploadError) throw uploadError;
+
+            const { data } = supabase.storage
+                .from('documents')
+                .getPublicUrl(fileName);
+
+            const publicUrl = data.publicUrl;
+            const updateField = uploadingSide === 'front' ? 'cnic_front_url' : 'cnic_back_url';
+
+            const { error: updateError } = await supabase
+                .from('profiles')
+                .update({ [updateField]: publicUrl })
+                .eq('id', userId);
+
+            if (updateError) throw updateError;
+
+            setUser({ ...user, [updateField]: publicUrl });
+
+            // Sync cache
+            const cachedUsers = localStorage.getItem('nova_users_cache');
+            if (cachedUsers) {
+                const users = JSON.parse(cachedUsers);
+                const index = users.findIndex((u: any) => u.id === userId);
+                if (index !== -1) {
+                    users[index] = { ...users[index], [updateField]: publicUrl };
+                    localStorage.setItem('nova_users_cache', JSON.stringify(users));
+                }
+            }
+
+            addToast({ type: 'success', title: 'Document Updated', message: `CNIC ${uploadingSide} has been updated successfully.` });
+        } catch (error: any) {
+            console.error('Error updating CNIC:', error);
+            addToast({ type: 'error', title: 'Upload Failed', message: error.message });
+        } finally {
+            setIsCNICUploading(prev => ({ ...prev, [uploadingSide]: false }));
+            setUploadingSide(null);
+            if (event.target) event.target.value = '';
         }
     };
 
@@ -221,6 +318,16 @@ const UserDetails: React.FC<UserDetailsProps> = ({ userId, onBack, onStatusChang
                         </h1>
                     </div>
                 </div>
+                {onPreviewV2 && effectiveRole === 'Super Admin' && (
+                    <Button
+                        variant="metallic"
+                        size="sm"
+                        onClick={onPreviewV2}
+                        className="px-6 shadow-lg shadow-brand-primary/20"
+                    >
+                        Preview V2 UI
+                    </Button>
+                )}
                 <div className="flex items-center gap-3">
                     {/* Actions removed as requested */}
                 </div>
@@ -238,19 +345,17 @@ const UserDetails: React.FC<UserDetailsProps> = ({ userId, onBack, onStatusChang
                         <div className="flex flex-col sm:flex-row items-center gap-6 text-center sm:text-left">
                             {/* Profile Image with Ring */}
                             <div className="relative shrink-0">
-                                <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full shadow-2xl overflow-hidden relative z-10">
-                                    <Avatar
-                                        src={user.avatar_url}
-                                        initials={(() => {
-                                            const parts = user.name?.split(' ').filter(Boolean) || [];
-                                            if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-                                            if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-                                            return '??';
-                                        })()}
-                                        size="xl"
-                                        className="w-full h-full"
-                                    />
-                                </div>
+                                <Avatar
+                                    src={user.avatar_url}
+                                    initials={(() => {
+                                        const parts = user.name?.split(' ').filter(Boolean) || [];
+                                        if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+                                        if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+                                        return '??';
+                                    })()}
+                                    size="2xl"
+                                    className="shadow-2xl ring-4 ring-black/20"
+                                />
                                 {/* Status Indicator */}
                                 <div className={`absolute bottom-1 right-1 w-5 h-5 rounded-full z-20 ${user.status === 'Active' ? 'bg-brand-success shadow-[0_0_10px_rgba(34,197,94,0.4)]' :
                                     user.status === 'Pending' ? 'bg-brand-warning shadow-[0_0_10px_rgba(234,179,8,0.4)]' :
@@ -283,20 +388,10 @@ const UserDetails: React.FC<UserDetailsProps> = ({ userId, onBack, onStatusChang
 
                                     <div className="flex flex-wrap items-center justify-center sm:justify-start gap-3">
                                         {/* Role Badge */}
-                                        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/5 border border-white/10 backdrop-blur-sm">
-                                            <IconUser className="w-3.5 h-3.5 text-brand-primary" />
-                                            <span className="text-xs font-bold text-white uppercase tracking-wider">{user.role}</span>
-                                        </div>
+                                        <RoleCapsule role={user.role} />
 
                                         {/* Status Badge */}
-                                        <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border backdrop-blur-sm ${user.status === 'Active' ? 'bg-brand-success/10 border-brand-success/20 text-brand-success' :
-                                            user.status === 'Pending' ? 'bg-brand-warning/10 border-brand-warning/20 text-brand-warning' :
-                                                'bg-brand-error/10 border-brand-error/20 text-brand-error'
-                                            }`}>
-                                            <div className={`w-1.5 h-1.5 rounded-full ${user.status === 'Active' ? 'bg-brand-success' :
-                                                user.status === 'Pending' ? 'bg-brand-warning' :
-                                                    'bg-brand-error'
-                                                }`} />
+                                        <div className={getStatusCapsuleClasses(user.status)}>
                                             <span className="text-xs font-bold uppercase tracking-wider">{user.status === 'Disabled' ? 'Deactivated' : user.status}</span>
                                         </div>
                                     </div>
@@ -314,7 +409,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({ userId, onBack, onStatusChang
                         <h3 className="text-sm font-bold text-white uppercase tracking-widest relative z-10">USER DETAILS</h3>
                     </div>
                     <div className="p-8">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-y-10 gap-x-12">
+                        <div className={`grid gap-y-10 gap-x-12 ${user.role?.toLowerCase().includes('project manager') ? 'grid-cols-3' : 'grid-cols-1 md:grid-cols-2'}`}>
                             {/* Row 1 */}
                             <div className="flex items-center gap-4">
                                 <div className="w-12 h-12 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-center text-gray-500 shadow-inner">
@@ -336,16 +431,43 @@ const UserDetails: React.FC<UserDetailsProps> = ({ userId, onBack, onStatusChang
                                 </div>
                             </div>
 
-                            {/* Row 2 */}
-                            <div className="flex items-center gap-4">
-                                <div className="w-12 h-12 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-center text-gray-500 shadow-inner">
-                                    <IconCreditCard className="w-6 h-6" />
-                                </div>
-                                <div className="flex flex-col">
-                                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em] mb-1">Payment Email</span>
-                                    <span className="text-base text-white font-medium truncate">{user.payment_email || 'Not provided'}</span>
-                                </div>
-                            </div>
+                            {/* Row 2 — Payment Method & Email: hidden when viewing a Project Manager's profile */}
+                            {!user.role?.toLowerCase().includes('project manager') && (
+                                <>
+                                    {/* Preferred Method - High Premium Orange Gradient Card */}
+                                    <div className="relative group overflow-hidden p-5 rounded-3xl bg-gradient-to-br from-[#FF6B4B] to-[#D9361A] border border-[#FF4D2D] shadow-[0_12px_24px_-8px_rgba(217,54,26,0.5),inset_0_1px_rgba(255,255,255,0.4)] transition-all hover:scale-[1.02] cursor-default">
+                                        {/* Metallic Shine Overlays */}
+                                        <div className="absolute inset-0 bg-[linear-gradient(115deg,rgba(255,255,255,0.05)_0%,rgba(255,255,255,0.2)_50%,rgba(255,255,255,0.05)_100%)] opacity-40 pointer-events-none" />
+                                        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.2)_0%,transparent_70%)] pointer-events-none" />
+                                        
+                                        <div className="flex items-center gap-4 relative z-10">
+                                            <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center p-1.5 shadow-2xl border border-white/30 shrink-0">
+                                                {user.preferred_payment_method === 'Payoneer' ? (
+                                                    <img src="/payoneericon.jpeg" alt="Payoneer" className="w-full h-full object-contain" />
+                                                ) : (
+                                                    <IconBank className="w-6 h-6 text-[#D9361A]" strokeWidth={2.5} />
+                                                )}
+                                            </div>
+                                            <div className="flex flex-col">
+                                                <span className="text-[10px] font-black text-white/70 uppercase tracking-[0.25em] mb-1">Preferred Method</span>
+                                                <span className="text-base text-white font-black truncate drop-shadow-sm">
+                                                    {user.preferred_payment_method || 'Not Specified'}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-4">
+                                        <div className="w-12 h-12 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-center text-gray-500 shadow-inner">
+                                            <IconMail className="w-6 h-6" />
+                                        </div>
+                                        <div className="flex flex-col">
+                                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em] mb-1">Payment Email</span>
+                                            <span className="text-base text-white font-medium truncate">{user.payment_email || 'Not provided'}</span>
+                                        </div>
+                                    </div>
+                                </>
+                            )}
 
                             <div className="flex items-center gap-4">
                                 <div className="w-12 h-12 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-center text-gray-500 shadow-inner">
@@ -405,68 +527,94 @@ const UserDetails: React.FC<UserDetailsProps> = ({ userId, onBack, onStatusChang
                 )}
             </div>
 
-            {/* Role-Specific Sections: CNIC for Freelancers */}
-            {isFreelancer && (
-                <div className="grid grid-cols-1 gap-6">
-                    <Card isElevated className="p-0 overflow-hidden">
-                        <div className="px-8 py-6 border-b border-white/[0.05] bg-white/[0.02]">
-                            <h3 className="text-sm font-bold text-white uppercase tracking-widest">CNIC DOCUMENTS</h3>
-                        </div>
-                        <div className="p-8 space-y-8">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div className="space-y-3">
-                                    <div
-                                        className="aspect-[1.5/1] rounded-2xl bg-black/40 border border-surface-border overflow-hidden flex items-center justify-center group relative shadow-inner cursor-pointer"
-                                        onClick={() => user.cnic_front_url && setPreviewImage(user.cnic_front_url)}
-                                    >
-                                        {user.cnic_front_url ? (
-                                            <img src={user.cnic_front_url} alt="CNIC Front" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                                        ) : (
-                                            <div className="text-center p-4">
-                                                <IconFileImage className="w-10 h-10 text-gray-800 mx-auto mb-2" />
-                                                <span className="text-[10px] font-bold text-gray-700 uppercase tracking-widest">Image missing</span>
-                                            </div>
-                                        )}
-                                        {user.cnic_front_url && (
-                                            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-3">
-                                                <div className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center text-white scale-90 group-hover:scale-100 transition-transform duration-300">
+            {/* Uploaded Documents — shown for any user who has CNIC docs */}
+            <div className="grid grid-cols-1 gap-6">
+                <Card isElevated className="p-0 overflow-hidden">
+                    <div className="px-8 py-6 border-b border-white/[0.05] bg-white/[0.02]">
+                        <h3 className="text-sm font-bold text-white uppercase tracking-widest">VERIFICATION DOCUMENTS</h3>
+                    </div>
+                    <div className="p-8 space-y-8">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className="space-y-3">
+                                <div
+                                    className="aspect-[1.5/1] rounded-2xl bg-black/40 border border-surface-border overflow-hidden flex items-center justify-center group relative shadow-inner cursor-pointer"
+                                >
+                                    {user.cnic_front_url ? (
+                                        <img src={user.cnic_front_url} alt="CNIC Front" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                                    ) : (
+                                        <div className="text-center p-4">
+                                            <IconFileImage className="w-10 h-10 text-gray-800 mx-auto mb-2" />
+                                            <span className="text-[10px] font-bold text-gray-700 uppercase tracking-widest">Front side missing</span>
+                                        </div>
+                                    )}
+
+                                    {/* Overlays */}
+                                    <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-3">
+                                        <div className="flex gap-4">
+                                            {user.cnic_front_url && (
+                                                <button
+                                                    title="View Identity Document"
+                                                    onClick={(e) => { e.stopPropagation(); setPreviewImage(user.cnic_front_url); }}
+                                                    className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center text-white hover:bg-white/20 transition-all"
+                                                >
                                                     <IconMaximize size={24} />
-                                                </div>
-                                                <span className="text-[10px] font-bold text-white uppercase tracking-widest">Click to Expand</span>
-                                            </div>
-                                        )}
+                                                </button>
+                                            )}
+                                            <button
+                                                title={user.cnic_front_url ? 'Re-upload Document' : 'Upload Document'}
+                                                onClick={(e) => { e.stopPropagation(); handleCNICClick('front'); }}
+                                                className="w-12 h-12 rounded-full bg-brand-primary/20 backdrop-blur-md border border-brand-primary/40 flex items-center justify-center text-brand-primary hover:bg-brand-primary/30 transition-all"
+                                                disabled={isCNICUploading.front}
+                                            >
+                                                {isCNICUploading.front ? <IconLoader className="w-6 h-6 animate-spin" /> : <IconCamera size={24} />}
+                                            </button>
+                                        </div>
                                     </div>
-                                    <p className="text-[10px] font-bold text-gray-500 text-center uppercase tracking-[0.2em]">CNIC Front</p>
                                 </div>
-                                <div className="space-y-3">
-                                    <div
-                                        className="aspect-[1.5/1] rounded-2xl bg-black/40 border border-surface-border overflow-hidden flex items-center justify-center group relative shadow-inner cursor-pointer"
-                                        onClick={() => user.cnic_back_url && setPreviewImage(user.cnic_back_url)}
-                                    >
-                                        {user.cnic_back_url ? (
-                                            <img src={user.cnic_back_url} alt="CNIC Back" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                                        ) : (
-                                            <div className="text-center p-4">
-                                                <IconFileImage className="w-10 h-10 text-gray-800 mx-auto mb-2" />
-                                                <span className="text-[10px] font-bold text-gray-700 uppercase tracking-widest">Image missing</span>
-                                            </div>
-                                        )}
-                                        {user.cnic_back_url && (
-                                            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-3">
-                                                <div className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center text-white scale-90 group-hover:scale-100 transition-transform duration-300">
+                                <p className="text-[10px] font-bold text-gray-500 text-center uppercase tracking-[0.2em]">CNIC Front</p>
+                            </div>
+                            <div className="space-y-3">
+                                <div
+                                    className="aspect-[1.5/1] rounded-2xl bg-black/40 border border-surface-border overflow-hidden flex items-center justify-center group relative shadow-inner cursor-pointer"
+                                >
+                                    {user.cnic_back_url ? (
+                                        <img src={user.cnic_back_url} alt="CNIC Back" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                                    ) : (
+                                        <div className="text-center p-4">
+                                            <IconFileImage className="w-10 h-10 text-gray-800 mx-auto mb-2" />
+                                            <span className="text-[10px] font-bold text-gray-700 uppercase tracking-widest">Back side missing</span>
+                                        </div>
+                                    )}
+
+                                    {/* Overlays */}
+                                    <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-3">
+                                        <div className="flex gap-4">
+                                            {user.cnic_back_url && (
+                                                <button
+                                                    title="View Identity Document"
+                                                    onClick={(e) => { e.stopPropagation(); setPreviewImage(user.cnic_back_url); }}
+                                                    className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center text-white hover:bg-white/20 transition-all"
+                                                >
                                                     <IconMaximize size={24} />
-                                                </div>
-                                                <span className="text-[10px] font-bold text-white uppercase tracking-widest">Click to Expand</span>
-                                            </div>
-                                        )}
+                                                </button>
+                                            )}
+                                            <button
+                                                title={user.cnic_back_url ? 'Re-upload Document' : 'Upload Document'}
+                                                onClick={(e) => { e.stopPropagation(); handleCNICClick('back'); }}
+                                                className="w-12 h-12 rounded-full bg-brand-primary/20 backdrop-blur-md border border-brand-primary/40 flex items-center justify-center text-brand-primary hover:bg-brand-primary/30 transition-all"
+                                                disabled={isCNICUploading.back}
+                                            >
+                                                {isCNICUploading.back ? <IconLoader className="w-6 h-6 animate-spin" /> : <IconCamera size={24} />}
+                                            </button>
+                                        </div>
                                     </div>
-                                    <p className="text-[10px] font-bold text-gray-500 text-center uppercase tracking-[0.2em]">CNIC Back</p>
                                 </div>
+                                <p className="text-[10px] font-bold text-gray-500 text-center uppercase tracking-[0.2em]">CNIC Back</p>
                             </div>
                         </div>
-                    </Card>
-                </div>
-            )}
+                    </div>
+                </Card>
+            </div>
 
             {/* Image Preview Modal */}
             <Modal
@@ -584,6 +732,61 @@ const UserDetails: React.FC<UserDetailsProps> = ({ userId, onBack, onStatusChang
                     </div>
                 </ElevatedMetallicCard>
             </div>
+            <input
+                type="file"
+                ref={cnicFileInputRef}
+                className="hidden"
+                accept="image/*"
+                onChange={handleCNICFileChange}
+            />
+
+            {/* Delete Confirmation Modal */}
+            <Modal
+                isOpen={isDeleteModalOpen}
+                onClose={() => setIsDeleteModalOpen(false)}
+                title="Confirm Deletion"
+                size="md"
+            >
+                <div className="space-y-6">
+                    <div className="flex flex-col items-center text-center gap-4">
+                        <div className="w-16 h-16 rounded-full bg-red-500/10 flex items-center justify-center text-red-500 shadow-xl shadow-red-500/10 border border-red-500/20">
+                            <IconTrash size={32} />
+                        </div>
+                        <div className="space-y-2">
+                            <h3 className="text-xl font-bold text-white uppercase tracking-tight">Permanently Delete User?</h3>
+                            <p className="text-gray-400 text-sm leading-relaxed px-4">
+                                Are you sure you want to delete <span className="text-white font-semibold">{user?.name}</span>?
+                                This action is irreversible and will remove all associated profile data.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-4 flex gap-3">
+                        <IconAlertTriangle className="text-yellow-500 shrink-0 w-5 h-5" />
+                        <p className="text-[11px] text-yellow-500/80 leading-relaxed font-medium">
+                            Warning: Historical data like completed projects will persist with a <span className="text-yellow-500 font-bold">NULL</span> reference to maintain record integrity.
+                        </p>
+                    </div>
+
+                    <div className="flex gap-3 pt-2">
+                        <Button
+                            variant="recessed"
+                            className="flex-1 h-11 border-white/5 hover:bg-white/5"
+                            onClick={() => setIsDeleteModalOpen(false)}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            variant="metallic"
+                            className="flex-1 !bg-gradient-to-b !from-red-500 !to-red-700 !border-red-600 text-white h-11 shadow-lg shadow-red-500/20 hover:shadow-red-500/40"
+                            onClick={executeDeleteUser}
+                            isLoading={updating}
+                        >
+                            Delete User
+                        </Button>
+                    </div>
+                </div>
+            </Modal>
         </div>
     );
 };

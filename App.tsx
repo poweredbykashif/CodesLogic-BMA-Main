@@ -8,6 +8,8 @@ import Chats from './sections/Chats';
 import Users, { UsersHandle } from './sections/Users';
 import Channels from './sections/Channels';
 import Integrations from './sections/Integrations';
+import Workload from './sections/Workload';
+import CapacityTickets from './sections/CapacityTickets';
 import Settings, { SettingsHandle } from './sections/Settings';
 import { Modal } from './components/Surfaces';
 import Button from './components/Button';
@@ -15,16 +17,29 @@ import { IconSettings } from './components/Icons';
 import Earnings from './sections/Earnings';
 import ProjectDetails from './sections/ProjectDetails';
 import UserDetails from './sections/UserDetails';
-import SelectRole from './sections/SelectRole';
+import UserDetailsV2 from './sections/UserDetailsV2';
 import CompleteProfile from './sections/CompleteProfile';
 import PendingApproval from './sections/PendingApproval';
 import Reminders from './sections/Reminders';
 import Analytics from './sections/Analytics';
 import Tasks from './sections/Tasks';
 import Forms from './sections/Forms';
+import AlgorithmStudio from './sections/AlgorithmStudio';
+import FreelancerLevelsGuide from './sections/FreelancerLevelsGuide';
+import Applicants from './sections/Applicants';
+import Guide from './sections/Guide';
+import GuideAddProject from './sections/GuideAddProject';
+import GuideRemoveProject from './sections/GuideRemoveProject';
+import GuideMarkCancelled from './sections/GuideMarkCancelled';
+import GuideMarkApproved from './sections/GuideMarkApproved';
+import GuideTriggerDispute from './sections/GuideTriggerDispute';
+import GuideTriggerArtHelp from './sections/GuideTriggerArtHelp';
+import GuidePostComments from './sections/GuidePostComments';
+import GuideSendFiles from './sections/GuideSendFiles';
+import PlatformOverview from './sections/PlatformOverview';
 
 import { DashboardLayout, DashboardView } from './layouts/DashboardLayout';
-import { SignInScreen, SignUpScreen } from './sections/AuthScreens';
+import { SignInScreen } from './sections/AuthScreens';
 import { LegalPage } from './sections/Legal';
 import ThanksScreen from './sections/ThanksScreen';
 import { supabase } from './lib/supabase';
@@ -37,13 +52,14 @@ import { AccountProvider } from './contexts/AccountContext';
 import { ReminderOverlay } from './components/ReminderOverlay';
 
 
-type View = 'dashboard' | 'signin' | 'signup' | 'select-role' | 'complete-profile' | 'pending-approval' | 'deactivated' | 'welcome' | 'terms' | 'privacy';
+type View = 'dashboard' | 'signin' | 'complete-profile' | 'pending-approval' | 'deactivated' | 'welcome' | 'terms' | 'privacy';
 
 const App: React.FC = () => {
   const initial = getInitialView();
   const [view, setView] = useState<View>('signin');
   const [dashboardView, setDashboardView] = useState<DashboardView>(initial.view);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(initial.projectId);
+  const [selectedProjectData, setSelectedProjectData] = useState<any>(null);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(initial.userId);
   const [selectedRole, setSelectedRole] = useState<string | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -84,18 +100,22 @@ const App: React.FC = () => {
       return hasSeenWelcome ? 'dashboard' : 'welcome';
     }
 
-    // Only send to select-role if no profile/role exists
-    return 'select-role';
+    // Default to signin if no session/role found
+    return 'signin';
   };
 
   useEffect(() => {
     // Get initial session
     const initAuth = async () => {
+      console.log('🚀 initAuth started');
       try {
+        console.log('📡 Fetching session...');
         const { data: { session } } = await supabase.auth.getSession();
+        console.log('✅ Session fetched:', session?.user?.id || 'No session');
         setSession(session);
 
         if (session) {
+          console.log('👤 Fetching profile for:', session.user.id);
           const { data: profile, error: profileError } = await supabase
             .from('profiles')
             .select('status, role, has_seen_welcome')
@@ -103,35 +123,61 @@ const App: React.FC = () => {
             .single();
 
           if (profile) {
+            console.log('✅ Profile found:', profile);
             if (profile.role) setSelectedRole(profile.role);
             setInitialStatus(profile.status);
             const targetView = determineView(profile, session);
+            console.log('🎯 Routing to:', targetView);
             setView(targetView);
           } else {
-            // Metadata check for invited users
-            const metaRole = session.user.user_metadata?.role;
-            if (metaRole) {
-              setSelectedRole(metaRole);
-              setInitialStatus('Invited');
-              setView('complete-profile');
-            } else {
-              const savedStep = localStorage.getItem('nova_onboarding_step') as View | null;
-              if (savedStep && (savedStep === 'select-role' || savedStep === 'complete-profile')) {
-                setView(savedStep);
-                const savedRole = localStorage.getItem('nova_selected_role');
-                if (savedRole) setSelectedRole(savedRole);
+            console.warn('⚠️ Profile not found in DB. Error:', profileError);
+
+            // If it's a real "Not Found" error (PGRST116), check metadata
+            // If it's a connection error (timeout/network), don't force onboarding
+            const isNotFoundError = profileError?.code === 'PGRST116';
+
+            if (isNotFoundError) {
+              console.log('ℹ️ Identity check: Profile does not exist, checking metadata...');
+              const metaRole = session.user.user_metadata?.role;
+              if (metaRole) {
+                console.log('📝 Found role in metadata:', metaRole);
+                setSelectedRole(metaRole);
+                setInitialStatus('Invited');
+                setView('complete-profile');
               } else {
-                setView('select-role');
+                console.log('❓ No role in metadata, checking saved step...');
+                const savedStep = localStorage.getItem('nova_onboarding_step') as View | null;
+                if (savedStep && savedStep === 'complete-profile') {
+                  setView(savedStep);
+                  const savedRole = localStorage.getItem('nova_selected_role');
+                  if (savedRole) setSelectedRole(savedRole);
+                } else {
+                  setView('signin');
+                }
               }
+            } else {
+              // Connection error or something else - stay on signin or show error
+              console.error('🛑 Database unreachable, timing out, or unexpected error. Defaulting to signin.');
+              setView('signin');
             }
           }
         } else {
-          setView('signin');
+          const { view: initialView } = getInitialView();
+          if (initialView === 'Guide' || initialView === 'PlatformOverview') {
+            setView('dashboard');
+          } else if (initialView?.startsWith('Guide')) {
+            updateRoute('Guide');
+            setDashboardView('Guide');
+            setView('dashboard');
+          } else {
+            setView('signin');
+          }
         }
       } catch (err) {
-        console.error('Error during initAuth:', err);
+        console.error('❌ Error during initAuth:', err);
         setView('signin');
       } finally {
+        console.log('🏁 initAuth finished, setting loading to false');
         setLoading(false);
       }
     };
@@ -166,8 +212,18 @@ const App: React.FC = () => {
             }
           });
       } else {
-        setView('signin');
-        localStorage.removeItem('lastDashboardView');
+        const { view: currentView } = getInitialView();
+        if (currentView === 'Guide' || currentView === 'PlatformOverview') {
+          setView('dashboard');
+          setDashboardView(currentView);
+        } else if (currentView?.startsWith('Guide')) {
+          updateRoute('Guide');
+          setDashboardView('Guide');
+          setView('dashboard');
+        } else {
+          setView('signin');
+          localStorage.removeItem('lastDashboardView');
+        }
       }
     });
 
@@ -185,6 +241,14 @@ const App: React.FC = () => {
       window.removeEventListener('popstate', handlePopState);
     };
   }, []);
+
+  // Persistent Auth Guard for Documentation routes
+  useEffect(() => {
+    if (!loading && !session && dashboardView.startsWith('Guide') && dashboardView !== 'Guide') {
+      updateRoute('Guide');
+      setDashboardView('Guide');
+    }
+  }, [dashboardView, session, loading]);
 
   useEffect(() => {
     if (view === 'dashboard') {
@@ -223,6 +287,39 @@ const App: React.FC = () => {
       setPendingProjectId(null);
       return;
     }
+    // Auth Guard for Guides
+    if (item.startsWith('Guide') && item !== 'Guide' && !session) {
+      updateRoute('Guide');
+      setDashboardView('Guide');
+      return;
+    }
+
+    // Special handling for public guide sections
+    const guideSections: Record<string, string> = {
+      'GuideVideoIntro': 'video-intro',
+      'GuideSystemWorks': 'system-works',
+      'GuideWorkflowSummary': 'workflow-summary',
+      'GuidePaymentOverview': 'payment-overview',
+      'GuideJoinDesigner': 'join-designer'
+    };
+
+    if (guideSections[item]) {
+      if (dashboardView === 'Guide') {
+        document.getElementById(guideSections[item])?.scrollIntoView({ behavior: 'smooth' });
+      } else {
+        setDashboardView('Guide');
+        updateRoute('Guide');
+        setTimeout(() => {
+          document.getElementById(guideSections[item])?.scrollIntoView({ behavior: 'smooth' });
+        }, 100);
+      }
+      setDashboardView(item); // Keep it active in sidebar
+      return;
+    }
+
+    // Update route immediately BEFORE setting state to ensure child components mount with the correct URL context
+    updateRoute(item);
+
     setDashboardView(item);
     setSelectedProjectId(null);
     setSelectedUserId(null);
@@ -260,6 +357,7 @@ const App: React.FC = () => {
               if (nextView) {
                 setDashboardView(nextView);
                 setSelectedProjectId(null);
+                setSelectedProjectData(null);
                 setSelectedUserId(null);
               } else if (nextProject) {
                 setDashboardView('Projects');
@@ -281,6 +379,7 @@ const App: React.FC = () => {
               if (nextView) {
                 setDashboardView(nextView);
                 setSelectedProjectId(null);
+                setSelectedProjectData(null);
                 setSelectedUserId(null);
               } else if (nextProject) {
                 setDashboardView('Projects');
@@ -315,15 +414,32 @@ const App: React.FC = () => {
             <div className={selectedProjectId ? 'hidden' : 'block h-full'}>
               <Projects
                 ref={projectsRef}
-                onProjectOpen={setSelectedProjectId}
+                onProjectOpen={(id, data) => {
+                  setSelectedProjectId(id);
+                  setSelectedProjectData(data);
+                }}
                 isProjectOpen={!!selectedProjectId}
               />
             </div>
             {selectedProjectId && (
               <ProjectDetails
                 projectId={selectedProjectId}
-                onBack={() => setSelectedProjectId(null)}
-                onStatusChange={() => projectsRef.current?.refresh()}
+                initialData={selectedProjectData}
+                onBack={() => {
+                  setSelectedProjectId(null);
+                  setSelectedProjectData(null);
+                }}
+                onStatusChange={(newStatus) => {
+                  projectsRef.current?.refresh();
+                  if (newStatus) projectsRef.current?.switchToStatusTab(newStatus);
+                }}
+                onIdChange={(oldId, newId) => {
+                  setSelectedProjectId(newId);
+                  projectsRef.current?.refresh();
+                }}
+                onUpdate={() => {
+                  projectsRef.current?.refresh();
+                }}
               />
             )}
           </>
@@ -353,10 +469,20 @@ const App: React.FC = () => {
                 userId={selectedUserId}
                 onBack={() => setSelectedUserId(null)}
                 onStatusChange={() => usersRef.current?.refresh()}
+                onPreviewV2={() => setDashboardView('UserDetailsV2')}
               />
             )}
           </>
         );
+        case 'UserDetailsV2': return (
+          <UserDetailsV2
+            userId={selectedUserId || ''}
+            onBack={() => setDashboardView('Users')}
+            onStatusChange={() => usersRef.current?.refresh()}
+          />
+        );
+        case 'Workload': return <Workload />;
+        case 'Tickets': return <CapacityTickets />;
         case 'Channels': return <Channels />;
         case 'Forms': return <Forms />;
         case 'Integrations': return <Integrations />;
@@ -376,6 +502,25 @@ const App: React.FC = () => {
           />
         );
         case 'Reminders': return <Reminders />;
+        case 'AlgorithmStudio': return <AlgorithmStudio />;
+        case 'LevelsGuide': return <FreelancerLevelsGuide />;
+        case 'Applicants': return <Applicants />;
+        case 'Guide':
+        case 'GuideVideoIntro':
+        case 'GuideSystemWorks':
+        case 'GuideWorkflowSummary':
+        case 'GuidePaymentOverview':
+        case 'GuideJoinDesigner':
+            return <Guide />;
+        case 'GuideAddProject': return <GuideAddProject />;
+        case 'GuideRemoveProject': return <GuideRemoveProject />;
+        case 'GuideMarkCancelled': return <GuideMarkCancelled />;
+        case 'GuideMarkApproved': return <GuideMarkApproved />;
+        case 'GuideTriggerDispute': return <GuideTriggerDispute />;
+        case 'GuideTriggerArtHelp': return <GuideTriggerArtHelp />;
+        case 'GuidePostComments': return <GuidePostComments />;
+        case 'GuideSendFiles': return <GuideSendFiles />;
+        case 'PlatformOverview': return <PlatformOverview />;
 
         default: return <Dashboard />;
       }
@@ -394,7 +539,9 @@ const App: React.FC = () => {
               <div className="w-12 h-12 border-2 border-brand-primary/20 border-t-brand-primary rounded-full animate-spin" />
             </div>
           ) : view === 'dashboard' ? (
-            session ? (
+            dashboardView.startsWith('Guide') || dashboardView === 'PlatformOverview' ? (
+              renderDashboardContent()
+            ) : (session) ? (
               <DashboardLayout
                 onSignOut={handleSignOut}
                 activeItem={dashboardView}
@@ -441,24 +588,12 @@ const App: React.FC = () => {
                         } else {
                           setDashboardView('Dashboard');
                           setSelectedProjectId(null);
+                          setSelectedProjectData(null);
                           setSelectedUserId(null);
                           setView('dashboard');
                         }
                       } else {
                         setView('dashboard');
-                      }
-                    }}
-                  />
-                ) : view === 'signup' ? (
-                  <SignUpScreen
-                    onToggle={() => setView('signin')}
-                    onNavigate={(v) => setView(v)}
-                    onSuccess={async () => {
-                      const { data: { session: currentSession } } = await supabase.auth.getSession();
-                      if (currentSession) {
-                        setView(determineView(null, currentSession));
-                      } else {
-                        setView('signin');
                       }
                     }}
                   />
@@ -487,8 +622,7 @@ const App: React.FC = () => {
                       setView(nextView as any);
                     }}
                     onBack={() => {
-                      localStorage.setItem('nova_onboarding_step', 'select-role');
-                      setView('select-role');
+                      setView('signin');
                     }}
                   />
                 ) : view === 'pending-approval' ? (
@@ -518,17 +652,9 @@ const App: React.FC = () => {
                     }}
                   />
                 ) : (
-                  <SelectRole
-                    onRoleSelect={(role) => {
-                      setSelectedRole(role);
-                      localStorage.setItem('nova_onboarding_step', 'complete-profile');
-                      localStorage.setItem('nova_selected_role', role);
-                      setView('complete-profile');
-                    }}
-                    onBack={() => {
-                      localStorage.setItem('nova_onboarding_step', 'signup');
-                      setView('signup');
-                    }}
+                  <SignInScreen
+                    onNavigate={(v) => setView(v)}
+                    onSuccess={() => setView('dashboard')}
                   />
                 )}
               </div>

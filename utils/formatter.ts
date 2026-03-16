@@ -47,10 +47,20 @@ export const formatTime = (timeStr: string | null | undefined): string => {
  * @param deadlineAt Timestamp string (UTC) or Date object
  * @returns { label: string, color: 'text-brand-success' | 'text-brand-warning' | 'text-brand-error' | 'text-gray-500' }
  */
-export const getTimeLeft = (deadlineAt: string | Date | null | undefined) => {
+export const getTimeLeft = (deadlineAt: string | Date | null | undefined, status?: string) => {
     // 1. Initial Check
     if (!deadlineAt) {
         return { label: '--', color: 'text-gray-500' };
+    }
+
+    // 1.1 Check for completed statuses
+    if (status) {
+        const s = status.trim().toLowerCase();
+        // Only final terminal state should show "Completed"
+        const completedStatuses = ['approved'];
+        if (completedStatuses.includes(s)) {
+            return { label: 'Completed', color: 'text-brand-success' };
+        }
     }
 
     try {
@@ -146,3 +156,17 @@ export const formatDisplayName = (name: string | null | undefined): string => {
         .map(word => word.charAt(0).toUpperCase() + word.slice(1))
         .join(' ');
 };
+
+/**
+ * Truncates a string to a specific number of words.
+ * @param text The text to truncate
+ * @param limit The number of words to keep
+ * @returns Truncated string with ellipsis if needed
+ */
+export const truncateByWords = (text: string | null | undefined, limit: number = 2): string => {
+    if (!text) return '';
+    const words = text.split(/\s+/).filter(Boolean);
+    if (words.length <= limit) return text;
+    return words.slice(0, limit).join(' ') + '...';
+};
+

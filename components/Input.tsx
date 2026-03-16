@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { InputProps, ComponentProps } from '../types';
 import { IconEye, IconEyeOff, IconMaximize } from './Icons';
-
+import TextareaAutosize from 'react-textarea-autosize';
 export const Input: React.FC<InputProps> = ({
   label,
   error,
@@ -13,6 +13,7 @@ export const Input: React.FC<InputProps> = ({
   type,
   size = 'md',
   variant = 'primary',
+  inputClassName = '',
   ...props
 }) => {
   const [showPassword, setShowPassword] = useState(false);
@@ -20,9 +21,13 @@ export const Input: React.FC<InputProps> = ({
   const inputType = isPassword ? (showPassword ? 'text' : 'password') : type;
 
   const sizes = {
-    sm: 'h-[34px] px-3 py-0 text-xs',
-    md: 'px-4 py-3 text-sm',
-    lg: 'px-4 py-4 text-base',
+    xs: 'h-8 px-2 py-1 text-xs',
+    sm: 'h-10 px-3 py-2 text-sm',
+    md: 'h-12 px-4 py-2 text-base',
+    lg: 'h-14 px-5 py-3 text-lg',
+    xl: 'h-16 px-6 py-4 text-xl',
+    '2xl': 'h-20 px-8 py-5 text-2xl',
+    none: '',
   };
 
   const iconSizes = {
@@ -52,19 +57,23 @@ export const Input: React.FC<InputProps> = ({
         )}
         <input
           type={inputType}
-          className={`w-full transition-all duration-300 outline-none rounded-xl ${sizes[size]} ${variant === 'metallic'
+          className={`w-full transition-[background-color,color,opacity,transform,filter,backdrop-filter] duration-300 outline-none focus:outline-none focus:ring-0 focus:ring-offset-0 rounded-xl ${sizes[size]} ${variant === 'metallic'
             ? 'bg-black/40 border-none text-white font-bold placeholder:text-gray-600 shadow-[inset_0_2px_8px_rgba(0,0,0,0.6)] focus:bg-black/60'
-            : `bg-surface-input border-2 text-white placeholder:text-gray-600 focus:border-brand-primary ${error ? 'border-brand-error' : success ? 'border-brand-success' : 'border-surface-border'}`
-            } ${leftIcon ? (size === 'sm' ? 'pl-9' : 'pl-12') : ''} ${isPassword || rightIcon ? (size === 'sm' ? 'pr-9' : 'pr-12') : ''} ${inputType === 'number' ? '[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none' : ''} ${inputCursorClass || (props.disabled ? 'cursor-not-allowed' : props.readOnly ? 'cursor-pointer' : '')}`}
+            : variant === 'recessed'
+              ? 'bg-black/40 border border-white/[0.05] shadow-[inset_0_2px_8px_rgba(0,0,0,0.4)] text-white placeholder:text-gray-600 focus:border-white/[0.05] focus:bg-black/50 outline-none focus:outline-none focus:ring-0'
+              : variant === 'flat'
+                ? 'bg-transparent border-none text-white placeholder:text-gray-600 focus:bg-white/[0.02] outline-none focus:outline-none focus:ring-0 shadow-none'
+                : `bg-surface-input border-2 text-white placeholder:text-gray-600 focus:border-brand-primary ${error ? 'border-brand-error' : success ? 'border-brand-success' : 'border-surface-border'}`
+            } ${leftIcon ? (size === 'sm' ? 'pl-9' : 'pl-12') : ''} ${isPassword || rightIcon ? (size === 'sm' ? 'pr-9' : 'pr-12') : ''} ${inputType === 'number' ? '[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none' : ''} ${inputCursorClass || (props.disabled ? 'cursor-not-allowed' : props.readOnly ? 'cursor-pointer' : '')} ${inputClassName}`}
           {...props}
         />
-        {/* Metallic Depth Overlay for Recessed Input */}
-        {variant === 'metallic' && (
-          <div className="absolute inset-[1px] pointer-events-none rounded-xl overflow-hidden">
+        {/* Depth Overlay for Metallic & Recessed Input */}
+        {(variant === 'metallic' || variant === 'recessed') && (
+          <div className="absolute inset-0 pointer-events-none rounded-xl overflow-hidden">
             {/* Inner Top Shadow for carved-in look */}
-            <div className="absolute top-0 left-0 right-0 h-4 bg-gradient-to-b from-black/60 to-transparent" />
+            <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-b from-black/60 to-transparent" />
             {/* Subtle Diagonal Machined Sheen */}
-            <div className="absolute inset-0 bg-[linear-gradient(135deg,transparent_0%,rgba(255,255,255,0.02)_48%,rgba(255,255,255,0.05)_50%,rgba(255,255,255,0.02)_52%,transparent_100%)] opacity-40" />
+            <div className="absolute inset-0 bg-[linear-gradient(135deg,transparent_0%,rgba(255,255,255,0.02)_48%,rgba(255,255,255,0.05)_50%,rgba(255,255,255,0.02)_52%,transparent_100%)] opacity-30" />
           </div>
         )}
         {isPassword ? (
@@ -93,27 +102,34 @@ export const Input: React.FC<InputProps> = ({
 export const TextArea: React.FC<React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
   label?: string,
   error?: string,
-  variant?: 'primary' | 'metallic',
-  onExpand?: () => void
-}> = ({ label, error, variant = 'primary', onExpand, className = '', ...props }) => {
+  variant?: 'primary' | 'metallic' | 'flat' | 'recessed',
+  onExpand?: () => void,
+  inputClassName?: string
+}> = ({ label, error, variant = 'primary', onExpand, className = '', inputClassName = '', ...props }) => {
   return (
     <div className={`flex flex-col gap-2 w-full ${className}`}>
       {label && <label className="text-sm font-medium text-gray-400 ml-1">{label}</label>}
       <div className="relative group">
-        <textarea
-          className={`w-full transition-all duration-300 outline-none rounded-xl px-4 py-3 min-h-[120px] resize-none ${onExpand ? 'pr-12' : ''} ${variant === 'metallic'
+        <TextareaAutosize
+          className={`w-full transition-[background-color,color,opacity,transform,filter,backdrop-filter] duration-300 outline-none focus:outline-none focus:ring-0 focus:ring-offset-0 rounded-xl px-4 py-3 min-h-[140px] resize-none overflow-hidden ${onExpand ? 'pr-12' : ''} ${variant === 'metallic'
             ? 'bg-black/40 border-white/[0.05] text-white font-bold placeholder:text-gray-600 shadow-[inset_0_2px_8px_rgba(0,0,0,0.6)] focus:bg-black/60'
-            : `bg-surface-input border-2 text-white placeholder:text-gray-600 focus:border-brand-primary ${error ? 'border-brand-error' : 'border-surface-border'}`
-            } ${props.readOnly || props.disabled ? 'cursor-not-allowed' : ''}`}
-          {...props}
+            : variant === 'recessed'
+              ? 'bg-black/20 border border-surface-border/50 text-white placeholder:text-gray-600 shadow-[inset_0_2px_6px_rgba(0,0,0,0.3)] focus:shadow-[inset_0_2px_8px_rgba(0,0,0,0.4)] focus:border-white/10'
+              : variant === 'flat'
+                ? 'bg-transparent border-none text-white placeholder:text-gray-600 focus:bg-white/[0.02] outline-none focus:outline-none focus:ring-0 shadow-none'
+                : `bg-surface-input border-2 text-white placeholder:text-gray-600 focus:border-brand-primary ${error ? 'border-brand-error' : 'border-surface-border'}`
+            } ${props.readOnly || props.disabled ? 'cursor-not-allowed' : ''} ${inputClassName}`}
+          {...(props as any)}
         />
-        {/* Metallic Depth Overlay for Recessed TextArea */}
-        {variant === 'metallic' && (
+        {/* Metallic Depth Overlay for Recessed/Metallic TextArea */}
+        {(variant === 'metallic' || variant === 'recessed') && (
           <div className="absolute inset-0 pointer-events-none rounded-xl overflow-hidden">
             {/* Inner Top Shadow for carved-in look */}
-            <div className="absolute top-0 left-0 right-0 h-8 bg-gradient-to-b from-black/60 to-transparent" />
-            {/* Subtle Diagonal Machined Sheen */}
-            <div className="absolute inset-0 bg-[linear-gradient(135deg,transparent_0%,rgba(255,255,255,0.02)_48%,rgba(255,255,255,0.05)_50%,rgba(255,255,255,0.02)_52%,transparent_100%)] opacity-30" />
+            <div className={`absolute top-0 left-0 right-0 ${variant === 'recessed' ? 'h-4 from-black/30' : 'h-8 from-black/60'} bg-gradient-to-b to-transparent`} />
+            {/* Subtle Diagonal Machined Sheen (only for metallic) */}
+            {variant === 'metallic' && (
+              <div className="absolute inset-0 bg-[linear-gradient(135deg,transparent_0%,rgba(255,255,255,0.02)_48%,rgba(255,255,255,0.05)_50%,rgba(255,255,255,0.02)_52%,transparent_100%)] opacity-30" />
+            )}
           </div>
         )}
         {onExpand && (

@@ -86,6 +86,7 @@ export const Permissions: React.FC<PermissionsProps> = ({ onSimulate, hideTabs, 
         { code: 'view_personal_earnings', name: 'My Earnings', category: 'General', description: 'Access to personal earnings tracker' },
         { code: 'view_tasks', name: 'Tasks Board', category: 'Tasks', description: 'Access to the tasks management board' },
         { code: 'view_projects', name: 'Projects Directory', category: 'Projects', description: 'Access to view and manage projects' },
+        { code: 'edit_projects', name: 'Edit Projects', category: 'Projects', description: 'Edit existing project properties and details' },
         { code: 'view_analytics', name: 'Analytics Page', category: 'Analytics', description: 'Main access to the Analytics module' },
         { code: 'view_gig_stats', name: 'Gig Statistics', category: 'Analytics', description: 'View detailed performance metrics for platform gigs' },
         { code: 'view_sales_analytics', name: 'Sales Analytics', category: 'Analytics', description: 'View revenue trends and sales volume data' },
@@ -98,6 +99,9 @@ export const Permissions: React.FC<PermissionsProps> = ({ onSimulate, hideTabs, 
         { code: 'access_chats', name: 'Internal Chats', category: 'Communication', description: 'Access to team messaging' },
         { code: 'access_reminders', name: 'System Reminders', category: 'Communication', description: 'Access to task reminders' },
         { code: 'view_users', name: 'Users & Teams', category: 'Users', description: 'View the company directory and teams' },
+        { code: 'view_workload', name: 'Workload & Capacity', category: 'Workload', description: 'View freelancer daily workload' },
+        { code: 'view_capacity_tickets', name: 'Capacity Tickets', category: 'Workload', description: 'Review and manage freelancer capacity requests' },
+        { code: 'edit_workload', name: 'Edit Capacity', category: 'Workload', description: 'Edit freelancer daily project capacity' },
         { code: 'create_users', name: 'Create Users', category: 'Users', description: 'Invite new users to the platform' },
         { code: 'edit_users', name: 'Edit Users', category: 'Users', description: 'Modify existing user profiles' },
         { code: 'delete_users', name: 'Delete Users', category: 'Users', description: 'Remove users from the system' },
@@ -106,6 +110,7 @@ export const Permissions: React.FC<PermissionsProps> = ({ onSimulate, hideTabs, 
         { code: 'view_channels', name: 'Channels', category: 'Channels', description: 'Access to communication channels' },
         { code: 'view_forms', name: 'Forms', category: 'Forms', description: 'Access to the forms engine' },
         { code: 'access_integrations', name: 'Integrations', category: 'System', description: 'Manage external platform links' },
+        { code: 'access_algorithm_studio', name: 'Algorithm', category: 'General', description: 'Advanced Logic Engine & Configuration' },
         { code: 'view_settings', name: 'Settings', category: 'General', description: 'Access to personal account settings' },
     ];
 
@@ -117,10 +122,15 @@ export const Permissions: React.FC<PermissionsProps> = ({ onSimulate, hideTabs, 
                 const { error: upsertError } = await supabase.from('permissions').upsert(REQUIRED_PERMISSIONS, { onConflict: 'code' });
                 if (upsertError) {
                     console.error('Self-healing upsert failed:', upsertError);
-                    // If it's a 403, the user might not have permission to sync the table
-                    if (upsertError.code === '403' || upsertError.message?.includes('policy')) {
-                        console.warn('Database Permissions table sync blocked by RLS. Using hard-injected values.');
-                    }
+                }
+
+                // Codifying security: Super Admin must have every system permission
+                if (effectiveRole === 'Super Admin') {
+                    const saPerms = REQUIRED_PERMISSIONS.map(p => ({
+                        role_name: 'Super Admin',
+                        permission_code: p.code
+                    }));
+                    await supabase.from('role_permissions').upsert(saPerms, { onConflict: 'role_name,permission_code' });
                 }
             }
 
@@ -550,7 +560,7 @@ export const Permissions: React.FC<PermissionsProps> = ({ onSimulate, hideTabs, 
                                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                                         {level1.map(perm => {
                                                             const isActive = rolePermissions[selectedRole]?.includes(perm.code);
-                                                            const isLocked = selectedRole === 'Super Admin';
+                                                            const isLocked = selectedRole === 'Super Admin' && profile?.role !== 'Super Admin';
                                                             return (
                                                                 <button
                                                                     key={perm.code}
@@ -581,7 +591,7 @@ export const Permissions: React.FC<PermissionsProps> = ({ onSimulate, hideTabs, 
                                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                                         {catPermissions.filter(p => getPermLevel(p.code) === 2).map(perm => {
                                                             const isActive = rolePermissions[selectedRole]?.includes(perm.code);
-                                                            const isLocked = selectedRole === 'Super Admin';
+                                                            const isLocked = selectedRole === 'Super Admin' && profile?.role !== 'Super Admin';
                                                             return (
                                                                 <button
                                                                     key={perm.code}
@@ -612,7 +622,7 @@ export const Permissions: React.FC<PermissionsProps> = ({ onSimulate, hideTabs, 
                                                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                                                         {level3.map(perm => {
                                                             const isActive = rolePermissions[selectedRole]?.includes(perm.code);
-                                                            const isLocked = selectedRole === 'Super Admin';
+                                                            const isLocked = selectedRole === 'Super Admin' && profile?.role !== 'Super Admin';
                                                             return (
                                                                 <button
                                                                     key={perm.code}
@@ -698,7 +708,7 @@ export const Permissions: React.FC<PermissionsProps> = ({ onSimulate, hideTabs, 
                                                 <p className={`text-[10px] truncate ${selectedUserId === user.id ? 'text-white/70' : 'text-gray-600'}`}>{user.role}</p>
 
                                                 {user.accountCount !== undefined && user.accountCount > 0 ? (
-                                                    <span className={`shrink-0 text-[8px] px-1.5 py-0.5 rounded-md font-black uppercase tracking-tighter border ${selectedUserId === user.id
+                                                    <span className={`shrink-0 text-[8px] px-3 py-1 rounded-md font-black uppercase tracking-wider border ${selectedUserId === user.id
                                                         ? 'bg-white/20 text-white border-white/20'
                                                         : (user.accountCount === accounts.length
                                                             ? 'bg-brand-primary/10 text-brand-primary border-brand-primary/20'
@@ -707,7 +717,7 @@ export const Permissions: React.FC<PermissionsProps> = ({ onSimulate, hideTabs, 
                                                         {user.accountCount === accounts.length ? 'Full Access' : `${user.accountCount} Scopes`}
                                                     </span>
                                                 ) : (
-                                                    <span className={`shrink-0 text-[8px] px-1.5 py-0.5 rounded-md font-black uppercase tracking-tighter border ${selectedUserId === user.id
+                                                    <span className={`shrink-0 text-[8px] px-3 py-1 rounded-md font-black uppercase tracking-wider border ${selectedUserId === user.id
                                                         ? 'bg-white/10 text-white/60 border-white/10'
                                                         : 'bg-brand-primary/10 text-brand-primary border-brand-primary/20'
                                                         }`}>No Scopes</span>

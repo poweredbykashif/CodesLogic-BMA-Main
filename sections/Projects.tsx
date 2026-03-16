@@ -4,11 +4,11 @@ import { supabase } from '../lib/supabase';
 import { Tabs, Pagination } from '../components/Navigation';
 import Button from '../components/Button';
 import { Table } from '../components/Table';
-import { IconPlus, IconSearch, IconEye, IconTrash, IconAlertTriangle, IconInfo, IconX, IconFile, IconFileText, IconFileImage, IconFileVideo, IconFileArchive, IconCalendar, IconMaximize, IconChevronRight } from '../components/Icons';
+import { IconPlus, IconSearch, IconEye, IconTrash, IconAlertTriangle, IconInfo, IconX, IconFile, IconFileText, IconFileImage, IconFileVideo, IconFileArchive, IconCalendar, IconMaximize, IconChevronRight, IconRefreshCw } from '../components/Icons';
 import { Modal } from '../components/Surfaces';
 import { Input, TextArea } from '../components/Input';
 import { DatePicker } from '../components/DatePicker';
-import { formatDeadlineDate, formatTime, getTimeLeft, formatDisplayName } from '../utils/formatter';
+import { formatDeadlineDate, formatTime, getTimeLeft, formatDisplayName, truncateByWords } from '../utils/formatter';
 import { Calendar } from '../components/Calendar';
 import { TimeSelect } from '../components/TimeSelect';
 import { Dropdown } from '../components/Dropdown';
@@ -18,15 +18,19 @@ import { getInitialTab, updateRoute } from '../utils/routing';
 import { useNotifications } from '../contexts/NotificationContext';
 import { triggerWebhooks } from '../utils/webhookTrigger';
 import { useUser } from '../contexts/UserContext';
+import { getStatusCapsuleClasses } from '../components/Badge';
 import { useAccounts } from '../contexts/AccountContext';
+import ReactMarkdown from 'react-markdown';
+import { markdownComponents, markdownPlugins, parseCodesLogicMarkdown } from './ProjectDetails';
 
 interface ProjectsProps {
-    onProjectOpen?: (id: string) => void;
+    onProjectOpen?: (id: string, data?: any) => void;
     isProjectOpen?: boolean;
 }
 
 export interface ProjectsHandle {
     refresh: () => void;
+    switchToStatusTab: (status: string) => void;
 }
 
 const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isProjectOpen }, ref) => {
@@ -34,9 +38,35 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
         refresh: () => {
             fetchProjects();
             fetchTabCounts();
+        },
+        switchToStatusTab: (status: string) => {
+            const tabId = Object.keys(statusMap).find(key => statusMap[key] === status);
+            if (tabId) {
+                setActiveTab(tabId);
+            }
         }
     }));
-    const [activeTab, setActiveTab] = useState(getInitialTab('Projects', 'progress'));
+    const initialTab = getInitialTab('Projects', 'all');
+    const [activeTab, setActiveTab] = useState(initialTab);
+
+    // Track last successful fetch to prevent redundant calls
+    const lastFetchParamsRef = useRef<string>('{}');
+
+    // Map tab IDs to their corresponding data status
+    const statusMap: Record<string, string> = useMemo(() => ({
+        all: '',
+        progress: 'In Progress',
+        revision: 'Revision',
+        'revision-urgent': 'Revision Urgent',
+        urgent: 'Urgent',
+        approval: 'Sent For Approval',
+        cancelled: 'Cancelled',
+        done: 'Done',
+        'revision-done': 'Revision Done',
+        'revision-urgent-done': 'Revision Urgent Done',
+        'urgent-done': 'Urgent Done',
+        approved: 'Approved'
+    }), []);
 
     useEffect(() => {
         // Only update route when no project is open to avoid overwriting project URLs
@@ -47,7 +77,7 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
 
     useEffect(() => {
         const handlePopState = () => {
-            setActiveTab(getInitialTab('Projects', 'progress'));
+            setActiveTab(getInitialTab('Projects', 'all'));
         };
         window.addEventListener('popstate', handlePopState);
         return () => window.removeEventListener('popstate', handlePopState);
@@ -71,12 +101,15 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
     const [projectTitle, setProjectTitle] = useState('');
     const [projectBriefText, setProjectBriefText] = useState('');
     const [projectBriefFiles, setProjectBriefFiles] = useState<File[]>([]);
+    const [optionsRequired, setOptionsRequired] = useState<string | null>(null);
     const [isUploading, setIsUploading] = useState(false);
     const [addons, setAddons] = useState<string[]>([]);
     const [addonsOther, setAddonsOther] = useState('');
     const [isBriefExpanded, setIsBriefExpanded] = useState(false);
+    const [briefMode, setBriefMode] = useState<'edit' | 'preview'>('edit');
     const [dueDate, setDueDate] = useState<Date | null>(null);
     const [dueTime, setDueTime] = useState('');
+    const [activeShortcut, setActiveShortcut] = useState<number | null>(null);
     const [selectedAssignee, setSelectedAssignee] = useState<string | null>(null);
     const [removalReason, setRemovalReason] = useState<string | null>(null);
     const [removalOtherText, setRemovalOtherText] = useState('');
@@ -90,193 +123,477 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
     const [showReview, setShowReview] = useState(false);
     const [isReviewLoading, setIsReviewLoading] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
-    const [teamMembers, setTeamMembers] = useState<any[]>([]); // Freelancers for assignee dropdown
+    const [isStatusExpanded, setIsStatusExpanded] = useState(false);
+    const [teamMembers, setTeamMembers] = useState<any[]>([]); // Current filtered freelancers
+    const [allFreelancers, setAllFreelancers] = useState<any[]>([]); // Source of truth for all freelancers
+    const [freelancerWorkload, setFreelancerWorkload] = useState<Record<string, { assigned: number, inProgress: number }>>({});
     const [pmCollaborators, setPmCollaborators] = useState<any[]>([]); // Project Managers for collaborators
     const [convertedBy, setConvertedBy] = useState<string | null>(null);
     const [teamPMs, setTeamPMs] = useState<any[]>([]); // Project Managers for "Converted By" dropdown
     const [searchQuery, setSearchQuery] = useState('');
-    const [searchFilter, setSearchFilter] = useState('id');
     const [alertFilter, setAlertFilter] = useState<'dispute' | 'arthelp' | null>(null);
-    const [tableData, setTableData] = useState<any[] | null>(null);
-    const [loading, setLoading] = useState(true);
+
+    // Permission Cache Context (Optimizes main query by preventing re-fetches)
+    const [permittedAccounts, setPermittedAccounts] = useState<string[] | null>(null);
+    const [collabProjectIds, setCollabProjectIds] = useState<string[] | null>(null);
+    const [pmAccountIds, setPmAccountIds] = useState<string[] | null>(null);
+    const [isPermissionsLoading, setIsPermissionsLoading] = useState(false);
+
+    const [tableData, setTableData] = useState<any[] | null>(() => {
+        // Try page-specific cache first (defaults to page 1)
+        const pageCache = localStorage.getItem(`nova_projects_cache_${initialTab}_page_1`);
+        if (pageCache) return JSON.parse(pageCache);
+
+        const cached = localStorage.getItem(`nova_projects_cache_${initialTab}`);
+        if (!cached) {
+            const legacy = localStorage.getItem('nova_projects_cache');
+            return legacy ? JSON.parse(legacy) : null;
+        }
+        return JSON.parse(cached);
+    });
+    // Stale-while-revalidate: if we have cached data, don't show skeleton on initial load
+    const [loading, setLoading] = useState(() => {
+        const hasTabCache = !!localStorage.getItem(`nova_projects_cache_${initialTab}`);
+        const hasLegacyCache = !!localStorage.getItem('nova_projects_cache');
+        return !(hasTabCache || hasLegacyCache);
+    });
     const [currentPage, setCurrentPage] = useState(1);
     const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
 
+
     const { profile, effectiveRole, hasPermission } = useUser();
-    const isFreelancer = effectiveRole?.toLowerCase().trim() === 'freelancer';
+    const userRole = effectiveRole?.toLowerCase().trim() || '';
+    const isProjectManager = userRole.includes('manager') || userRole.includes('admin') || userRole.includes('operations');
+    const isFreelancer = userRole.includes('freelancer') || userRole.includes('designer') || userRole.includes('presentation');
     const { addNotification } = useNotifications();
 
-    const ITEMS_PER_PAGE = 6;
-    const [totalCount, setTotalCount] = useState(0);
-    const [projectCounts, setProjectCounts] = useState<Record<string, number>>({});
+    const ITEMS_PER_PAGE = 8;
+    const [totalCount, setTotalCount] = useState<number>(() => {
+        const cached = localStorage.getItem(`nova_projects_total_count_${initialTab}`);
+        return cached ? parseInt(cached) : 0;
+    });
+    const [projectCounts, setProjectCounts] = useState<Record<string, number>>(() => {
+        const cached = localStorage.getItem('nova_projects_counts_cache');
+        return cached ? JSON.parse(cached) : {};
+    });
 
-    const fetchProjects = async (isInitial = false) => {
-        if (!profile || !effectiveRole) return;
-        if (isInitial) setLoading(true);
+    const row1Tabs = useMemo(() => [
+        { id: 'progress', label: `In Progress${projectCounts['progress'] > 0 ? ` ${projectCounts['progress']}` : ''}` },
+        { id: 'revision', label: `Revision${projectCounts['revision'] > 0 ? ` ${projectCounts['revision']}` : ''}` },
+        { id: 'revision-urgent', label: `Revision Urgent${projectCounts['revision-urgent'] > 0 ? ` ${projectCounts['revision-urgent']}` : ''}` },
+        { id: 'urgent', label: `Urgent${projectCounts['urgent'] > 0 ? ` ${projectCounts['urgent']}` : ''}` },
+        { id: 'approval', label: `Sent For Approval${projectCounts['approval'] > 0 ? ` ${projectCounts['approval']}` : ''}` },
+        { id: 'cancelled', label: `Cancelled${projectCounts['cancelled'] > 0 ? ` ${projectCounts['cancelled']}` : ''}` },
+    ], [projectCounts]);
+
+    const row2Tabs = useMemo(() => [
+        { id: 'all', label: `All${projectCounts['all'] > 0 ? ` ${projectCounts['all']}` : ''}` },
+        { id: 'done', label: `Done${projectCounts['done'] > 0 ? ` ${projectCounts['done']}` : ''}` },
+        { id: 'revision-done', label: `Revision Done${projectCounts['revision-done'] > 0 ? ` ${projectCounts['revision-done']}` : ''}` },
+        { id: 'revision-urgent-done', label: `Revision Urgent Done${projectCounts['revision-urgent-done'] > 0 ? ` ${projectCounts['revision-urgent-done']}` : ''}` },
+        { id: 'urgent-done', label: `Urgent Done${projectCounts['urgent-done'] > 0 ? ` ${projectCounts['urgent-done']}` : ''}` },
+        { id: 'approved', label: `Approved${projectCounts['approved'] > 0 ? ` ${projectCounts['approved']}` : ''}` },
+    ], [projectCounts]);
+
+    // 0. Permission Pre-Query Logic (Cache in memory to avoid blocking latency)
+    useEffect(() => {
+        if (!profile?.id || !userRole || effectiveRole === 'Super Admin') return;
+
+        async function prefetchPermissions() {
+            setIsPermissionsLoading(true);
+            try {
+                const isAdminLike = ['admin', 'project operations manager'].includes(userRole);
+                const isPM = userRole === 'project manager';
+                const isFreelancer = ['freelancer', 'designer', 'presentation', 'graphic designer', 'presentation designer'].some(r => userRole.includes(r));
+
+                const queries: Promise<any>[] = [];
+
+                // All non-super-admins need collaboration checks
+                queries.push(supabase.from('project_collaborators').select('project_id').eq('member_id', profile.id) as any);
+
+                if (isAdminLike) {
+                    queries.push(supabase.from('user_account_access').select('account_id').eq('user_id', profile.id) as any);
+                }
+
+                if (isPM) {
+                    queries.push(supabase.from('team_members').select('team_id').eq('member_id', profile.id) as any);
+                }
+
+                const results = await Promise.all(queries);
+
+                // Result 0 is ALWAYS collaboration
+                setCollabProjectIds(results[0].data?.map((c: any) => c.project_id) || []);
+
+                if (isAdminLike) {
+                    // Result 1 is account access
+                    setPermittedAccounts(results[1].data?.map((pa: any) => pa.account_id) || []);
+                }
+
+                if (isPM) {
+                    const pmResultIndex = isAdminLike ? 2 : 1;
+                    const userTeams = results[pmResultIndex]?.data || [];
+                    if (userTeams.length > 0) {
+                        const teamIds = userTeams.map((t: any) => t.team_id);
+                        const { data: teamAccountLinks } = await supabase
+                            .from('team_accounts').select('account_id').in('team_id', teamIds);
+                        if (teamAccountLinks) {
+                            setPmAccountIds([...new Set(teamAccountLinks.map((ta: any) => ta.account_id))]);
+                        } else {
+                            setPmAccountIds([]);
+                        }
+                    } else {
+                        setPmAccountIds([]);
+                    }
+                }
+            } catch (err) {
+                console.error('Permission prefetch error:', err);
+                // Fallback to empty arrays to unblock the main query
+                setPermittedAccounts([]);
+                setCollabProjectIds([]);
+                setPmAccountIds([]);
+            } finally {
+                setIsPermissionsLoading(false);
+            }
+        }
+
+        prefetchPermissions();
+    }, [profile?.id, userRole, effectiveRole]);
 
 
-        const userRole = effectiveRole.toLowerCase().trim();
-        const isSuperAdmin = effectiveRole === 'Super Admin';
-        const from = (currentPage - 1) * ITEMS_PER_PAGE;
-        const to = from + ITEMS_PER_PAGE - 1;
+    const isPermissionsReady = useMemo(() => {
+        if (effectiveRole === 'Super Admin') return true;
+        // Ready if we have at least started storing data (empty array means no access, but valid)
+        return permittedAccounts !== null || collabProjectIds !== null || pmAccountIds !== null;
+    }, [permittedAccounts, collabProjectIds, pmAccountIds, effectiveRole]);
 
-        let query = supabase
-            .from('projects')
-            .select('*', { count: 'exact' });
 
-        // 1. Apply Role-based Base Filtering
-        const isAdminLike = ['admin', 'super admin', 'project manager', 'project operations manager'].includes(userRole || '');
-        if (isAdminLike) {
-            // Check for granular account scoping for non-Super Admins
-            if (!isSuperAdmin) {
-                const { data: permittedAccounts } = await supabase
-                    .from('user_account_access')
-                    .select('account_id')
-                    .eq('user_id', profile.id);
+    async function fetchProjects(isInitial = false) {
+        if (!profile || !effectiveRole) {
+            setLoading(false);
+            return;
+        }
 
-                if (permittedAccounts && permittedAccounts.length > 0) {
-                    const accountIds = permittedAccounts.map(pa => pa.account_id);
-                    query = query.in('account_id', accountIds);
+        try {
+            // Stale-while-revalidate: only show skeleton if we have NO cached data
+            const hasCachedData = !!localStorage.getItem('nova_projects_cache');
+            if (isInitial && !hasCachedData) setLoading(true);
+
+            // 0. Ensure permissions are loaded before proceeding (unless Super Admin)
+            const isSuperAdmin = effectiveRole === 'Super Admin';
+            if (!isSuperAdmin && !permittedAccounts && !collabProjectIds && !pmAccountIds) {
+                // If permissions haven't even started loading, or we're waiting for them
+                // fetchProjects will be re-triggered by the permissions useEffect anyway
+                return;
+            }
+
+            const from = (currentPage - 1) * ITEMS_PER_PAGE;
+            const to = from + ITEMS_PER_PAGE - 1;
+
+            let query = supabase
+                .from('projects_list_view')
+                .select('project_id, project_title, status, assignee, client_name, client_type, price, designer_fee, due_date, due_time, created_at, account_id, account, has_dispute, has_art_help', { count: (debouncedSearchQuery.trim() || alertFilter) ? 'exact' : undefined });
+
+            // 1. Role-based filtering logic
+            const isAdminLike = ['admin', 'super admin', 'project operations manager'].includes(userRole || '');
+            const isPM = userRole === 'project manager';
+            const isFreelancer = ['freelancer', 'designer', 'presentation', 'graphic designer', 'presentation designer'].some(r => userRole?.includes(r));
+
+            if (isAdminLike && !isSuperAdmin) {
+                const accIds = permittedAccounts || [];
+                const projIds = collabProjectIds || [];
+
+                if (accIds.length > 0 || projIds.length > 0) {
+                    const orConditions: string[] = [];
+                    if (accIds.length > 0) orConditions.push(`account_id.in.(${accIds.map(id => `"${id}"`).join(',')})`);
+                    if (projIds.length > 0) orConditions.push(`project_id.in.(${projIds.map(id => `"${id}"`).join(',')})`);
+                    query = query.or(orConditions.join(','));
                 } else {
-                    // If an Admin has NO accounts assigned, they effectively see nothing 
-                    // (Safety measure to prevent accidental data leak)
                     setTableData([]);
                     setLoading(false);
                     return;
                 }
-            }
+                query = query.neq('status', 'Removed');
 
-            query = query
-                .neq('status', 'Removed')
-                .neq('status', 'Cancelled');
-        } else if (userRole === 'freelancer') {
-            query = query
-                .or(`assignee.eq."${profile.name}",assignee.eq."${profile.email}"`)
-                .neq('status', 'Removed')
-                .neq('status', 'Cancelled');
-        } else if (userRole === 'project manager') {
-            const { data: userTeams } = await supabase
-                .from('team_members')
-                .select('team_id')
-                .eq('member_id', profile.id);
+            } else if (isSuperAdmin) {
+                // Super Admin — no filters needed except removing hidden
+                query = query.neq('status', 'Removed');
 
-            if (userTeams && userTeams.length > 0) {
-                const teamIds = userTeams.map(t => t.team_id);
-                const { data: teamAccountLinks } = await supabase
-                    .from('team_accounts')
-                    .select('account_id')
-                    .in('team_id', teamIds);
+            } else if (isPM) {
+                const projIds = collabProjectIds || [];
+                const accIds = pmAccountIds || [];
 
-                if (teamAccountLinks && teamAccountLinks.length > 0) {
-                    const accountIds = [...new Set(teamAccountLinks.map(ta => ta.account_id))];
-                    query = query
-                        .in('account_id', accountIds)
-                        .neq('status', 'Removed')
-                        .neq('status', 'Cancelled');
+                if (accIds.length > 0 || projIds.length > 0) {
+                    const orParts: string[] = [];
+                    if (accIds.length > 0) orParts.push(`account_id.in.(${accIds.map(id => `"${id}"`).join(',')})`);
+                    if (projIds.length > 0) orParts.push(`project_id.in.(${projIds.map(id => `"${id}"`).join(',')})`);
+                    query = query.or(orParts.join(',')).neq('status', 'Removed');
                 } else {
-                    // No access to any accounts
                     setTableData([]);
                     setTotalCount(0);
                     setLoading(false);
                     return;
                 }
+
+            } else if (isFreelancer) {
+                const projIds = collabProjectIds || [];
+                const freelancerName = profile.name || profile.email;
+
+                let filterStr = `assignee.eq."${freelancerName}",assignee.eq."${profile.email}"`;
+                if (projIds.length > 0) {
+                    filterStr += `,project_id.in.(${projIds.map(id => `"${id}"`).join(',')})`;
+                }
+                query = query.or(filterStr).neq('status', 'Removed');
+
             } else {
-                // No teams
-                setTableData([]);
-                setTotalCount(0);
-                setLoading(false);
+                // Fallback for any other specific roles — restrict to collaborations only
+                const projIds = collabProjectIds || [];
+                if (projIds.length > 0) {
+                    query = query.in('project_id', projIds).neq('status', 'Removed');
+                } else {
+                    setTableData([]);
+                    setTotalCount(0);
+                    setLoading(false);
+                    return;
+                }
+            }
+
+            // 2. Tab Filter - Apply status filter if not on "All" tab AND no search query is active
+            // This makes search global across all statuses as requested by user
+            if (activeTab !== 'all' && !debouncedSearchQuery.trim()) {
+                const targetStatus = statusMap[activeTab];
+                if (targetStatus) query = query.ilike('status', targetStatus);
+            }
+
+            // 3. Alert Filter - Only apply if not searching for a global experience
+            if (!debouncedSearchQuery.trim()) {
+                if (alertFilter === 'dispute') query = query.eq('has_dispute', true);
+                else if (alertFilter === 'arthelp') query = query.eq('has_art_help', true);
+            }
+
+            // 4. Optimized Search Filter using Full Text Search (FTS)
+            if (debouncedSearchQuery.trim()) {
+                const q = debouncedSearchQuery.trim();
+                // Use plain text search which handles multiple words and provides index-aware matching
+                query = query.textSearch('search_vector', q, {
+                    config: 'english',
+                    type: 'plain'
+                });
+            }
+
+            // 5. Execute with ordering & pagination
+            // Urgency sorting: Earliest deadlines first (Late things at top), Nulls at bottom
+            const { data, count, error } = await query
+                .order('due_date', { ascending: true, nullsFirst: false })
+                .order('due_time', { ascending: true, nullsFirst: false })
+                .order('created_at', { ascending: false })
+                .range(from, to);
+
+            if (!error && data) {
+                const mappedData = data.map(p => ({
+                    ...p,
+                    id: p.project_id,
+                    title: p.project_title || 'Untitled',
+                    client: p.client_name || p.client_type || 'Unknown',
+                    assignee: p.assignee || 'Unassigned',
+                    dueDate: formatDeadlineDate(p.due_date),
+                    dueTime: p.due_time ? p.due_time.substring(0, 5) : '',
+                    status: p.status,
+                    price: p.price ? `$${p.price}` : '',
+                    payout: p.designer_fee ? `$${p.designer_fee}` : (isFreelancer ? '$0' : ''),
+                    timeLeft: getTimeLeft(p.due_date ? `${p.due_date}T${p.due_time || '00:00:00'}` : null, p.status),
+                    hasDispute: p.has_dispute || false,
+                    hasArtHelp: p.has_art_help || false
+                }));
+
+                // Optimization: Data is already minimal from query
+                const cacheData = mappedData;
+
+                setTableData(mappedData);
+
+                // Only cache if NOT searching to prevent search results from polluting status-specific caches
+                if (!debouncedSearchQuery.trim()) {
+                    try {
+                        // Cache with page specificity to prevent stale data during navigation
+                        localStorage.setItem(`nova_projects_cache_${activeTab}_page_${currentPage}`, JSON.stringify(cacheData));
+
+                        // Also keep a general tab cache for backward compatibility / quick fallback
+                        localStorage.setItem(`nova_projects_cache_${activeTab}`, JSON.stringify(cacheData));
+
+                        if (activeTab === 'all') {
+                            localStorage.setItem('nova_projects_cache', JSON.stringify(cacheData));
+                        }
+                    } catch (e) {
+                        console.warn('LocalStorage quota exceeded, skipping cache update:', e);
+                        if (e instanceof DOMException && (e.code === 22 || e.code === 1014 || e.name === 'QuotaExceededError')) {
+                            Object.keys(localStorage).forEach(key => {
+                                if (key.startsWith('nova_projects_cache_') || key.startsWith('nova_project_detail_')) {
+                                    localStorage.removeItem(key);
+                                }
+                            });
+                        }
+                    }
+                }
+
+                // OPTIMIZATION: Use pre-calculated tab count only if NOT searching and NOT using alert filters
+                if (debouncedSearchQuery.trim() || alertFilter) {
+                    if (count !== null) {
+                        setTotalCount(count);
+                    }
+                } else {
+                    const tabTotal = (projectCounts as any)[activeTab] || 0;
+                    setTotalCount(tabTotal);
+                }
+            }
+
+            if (error) throw error;
+
+        } catch (error: any) {
+            console.error('Error fetching projects:', {
+                message: error.message,
+                details: error.details,
+                hint: error.hint,
+                code: error.code,
+                full: error
+            });
+            addToast({ type: 'error', title: 'Fetch Error', message: error.message || 'Could not load projects.' });
+        } finally {
+            setLoading(false);
+        }
+    }
+    async function fetchTabCounts() {
+        if (!profile || !effectiveRole) return;
+
+        try {
+            // OPTIMIZATION: Try to get counts via server-side aggregation first (RPC)
+            // This is the most efficient method as it returns only ~15 values instead of thousands of rows
+            const { data: rpcData, error: rpcError } = await supabase.rpc('get_project_status_counts');
+
+            if (!rpcError && rpcData) {
+                const counts: Record<string, number> = {
+                    all: rpcData.all || 0,
+                    dispute: rpcData.dispute || 0,
+                    arthelp: rpcData.arthelp || 0,
+                    progress: 0,
+                    revision: 0,
+                    'revision-urgent': 0,
+                    urgent: 0,
+                    approval: 0,
+                    cancelled: 0,
+                    done: 0,
+                    'revision-done': 0,
+                    'revision-urgent-done': 0,
+                    'urgent-done': 0,
+                    approved: 0
+                };
+
+                // Map raw status names from DB to internal tab IDs
+                if (rpcData) {
+                    Object.entries(rpcData).forEach(([rawKey, count]) => {
+                        const s = rawKey.trim().toLowerCase();
+                        Object.entries(statusMap).forEach(([tabKey, mappedStatus]) => {
+                            if (s === mappedStatus.toLowerCase()) {
+                                counts[tabKey] = (count as number);
+                            }
+                        });
+                    });
+                }
+
+                setProjectCounts(counts);
+                localStorage.setItem('nova_projects_counts_cache', JSON.stringify(counts));
                 return;
             }
+        } catch (rpcErr) {
+            console.warn('RPC optimized counts failed, falling back to query method');
         }
 
-        // 2. Apply Tab Filter
-        if (activeTab !== 'all') {
-            const targetStatus = statusMap[activeTab];
-            if (targetStatus) {
-                query = query.ilike('status', targetStatus);
-            }
-        }
-
-        // 3. Apply Alert Filter
-        if (alertFilter === 'dispute') {
-            query = query.eq('has_dispute', true);
-        } else if (alertFilter === 'arthelp') {
-            query = query.eq('has_art_help', true);
-        }
-
-        // 4. Apply Search Filter
-        if (debouncedSearchQuery.trim()) {
-            const queryText = debouncedSearchQuery.trim();
-            const filterMap: Record<string, string> = {
-                'id': 'project_id',
-                'client': 'client_name',
-                'designer': 'assignee',
-                'title': 'project_title'
-            };
-            const dbColumn = filterMap[searchFilter] || 'project_id';
-            query = query.ilike(dbColumn, `%${queryText}%`);
-        }
-
-        // 5. Apply Ordering & Pagination
-        const { data, count, error } = await query
-            .order('created_at', { ascending: false })
-            .range(from, to);
-
-        if (!error && data) {
-            const mappedData = data.map(p => ({
-                id: p.project_id,
-                title: p.project_title || 'Untitled',
-                client: p.client_name || p.client_type || 'Unknown',
-                assignee: p.assignee || 'Unassigned',
-                dueDate: formatDeadlineDate(p.due_date),
-                dueTime: p.due_time ? p.due_time.substring(0, 5) : '',
-                status: p.status,
-                price: p.price ? `$${p.price}` : '',
-                payout: p.designer_fee ? `$${p.designer_fee}` : (isFreelancer ? '$0' : ''),
-                timeLeft: getTimeLeft(p.due_date ? `${p.due_date}T${p.due_time || '00:00:00'}` : null),
-                hasDispute: p.has_dispute || false,
-                hasArtHelp: p.has_art_help || false
-            }));
-            setTableData(mappedData);
-            if (count !== null) setTotalCount(count);
-        } else if (error) {
-            console.error('Error fetching projects:', error);
-            addToast({ type: 'error', title: 'Fetch Error', message: 'Could not load projects.' });
-        }
-
-        if (isInitial) setLoading(false);
-    };
-
-
-    const fetchTabCounts = async () => {
-        if (!profile || !effectiveRole) return;
-        const userRole = effectiveRole.toLowerCase().trim();
-
-        // We fetch status and alerts for ALL projects to calculate tab counts
-        // This is still much faster than fetching full row data
+        // FALLBACK: Original method (fetches columns and counts on client)
+        // Kept for backward compatibility if RPC is not yet deployed
         let query = supabase
             .from('projects')
-            .select('status, has_dispute, has_art_help');
+            .select('status, has_dispute, has_art_help')
+            .neq('status', 'Removed');
 
-        if (userRole === 'admin') {
-            query = query.neq('status', 'Removed').neq('status', 'Cancelled');
-        } else if (userRole === 'freelancer') {
-            query = query.or(`assignee.eq."${profile.name}",assignee.eq."${profile.email}"`).neq('status', 'Removed').neq('status', 'Cancelled');
+        const isFreelancer = ['freelancer', 'designer', 'presentation', 'graphic designer', 'presentation designer'].some(r => userRole?.includes(r));
+
+        if (userRole === 'admin' || userRole === 'project operations manager') {
+            if (effectiveRole !== 'Super Admin') {
+                const [{ data: permittedAccounts }, { data: collabDataCountsAdmin }] = await Promise.all([
+                    supabase.from('user_account_access').select('account_id').eq('user_id', profile.id),
+                    supabase.from('project_collaborators').select('project_id').eq('member_id', profile.id)
+                ]);
+                const accountIds = permittedAccounts?.map(pa => pa.account_id) || [];
+                const collabProjectIds = collabDataCountsAdmin?.map(c => c.project_id) || [];
+
+                if (accountIds.length > 0 || collabProjectIds.length > 0) {
+                    const orParts: string[] = [];
+                    if (accountIds.length > 0) orParts.push(`account_id.in.(${accountIds.map(id => `"${id}"`).join(',')})`);
+                    if (collabProjectIds.length > 0) orParts.push(`project_id.in.(${collabProjectIds.map(id => `"${id}"`).join(',')})`);
+                    query = query.or(orParts.join(','));
+                } else {
+                    setProjectCounts({ all: 0, dispute: 0, arthelp: 0 });
+                    return;
+                }
+            }
+        } else if (isFreelancer) {
+            const { data: collabDataCounts } = await supabase
+                .from('project_collaborators')
+                .select('project_id')
+                .eq('member_id', profile.id);
+            const collabProjectIds = collabDataCounts?.map(c => c.project_id) || [];
+
+            let filterStr = `assignee.eq."${profile.name}",assignee.eq."${profile.email}"`;
+            if (collabProjectIds.length > 0) {
+                filterStr += `,project_id.in.(${collabProjectIds.map(id => `"${id}"`).join(',')})`;
+            }
+            query = query.or(filterStr);
         } else if (userRole === 'project manager') {
-            const { data: userTeams } = await supabase.from('team_members').select('team_id').eq('member_id', profile.id);
+            // PARALLEL: fetch collaborator projects + team memberships simultaneously
+            const [{ data: collabDataCountsPM }, { data: userTeams }] = await Promise.all([
+                supabase.from('project_collaborators').select('project_id').eq('member_id', profile.id),
+                supabase.from('team_members').select('team_id').eq('member_id', profile.id)
+            ]);
+            const collabProjectIdsPM = collabDataCountsPM?.map(c => c.project_id) || [];
+
+            let accountIds: string[] = [];
             if (userTeams && userTeams.length > 0) {
                 const teamIds = userTeams.map(t => t.team_id);
                 const { data: teamAccountLinks } = await supabase.from('team_accounts').select('account_id').in('team_id', teamIds);
-                if (teamAccountLinks && teamAccountLinks.length > 0) {
-                    const accountIds = [...new Set(teamAccountLinks.map(ta => ta.account_id))];
-                    query = query.in('account_id', accountIds).neq('status', 'Removed').neq('status', 'Cancelled');
-                } else return;
-            } else return;
+                if (teamAccountLinks) accountIds = [...new Set(teamAccountLinks.map(ta => ta.account_id))];
+            }
+
+            if (accountIds.length > 0 || collabProjectIdsPM.length > 0) {
+                const orParts: string[] = [];
+                if (accountIds.length > 0) orParts.push(`account_id.in.(${accountIds.map(id => `"${id}"`).join(',')})`);
+                if (collabProjectIdsPM.length > 0) orParts.push(`project_id.in.(${collabProjectIdsPM.map(id => `"${id}"`).join(',')})`);
+                query = query.or(orParts.join(','));
+            } else {
+                setProjectCounts({ all: 0, dispute: 0, arthelp: 0 });
+                return;
+            }
+        } else if (effectiveRole !== 'Super Admin') {
+            setProjectCounts({ all: 0, dispute: 0, arthelp: 0 });
+            return;
         }
 
         const { data, error } = await query;
         if (!error && data) {
-            const counts: Record<string, number> = { all: data.length, dispute: 0, arthelp: 0 };
+            const counts: Record<string, number> = {
+                all: 0,
+                dispute: 0,
+                arthelp: 0,
+                progress: 0,
+                revision: 0,
+                'revision-urgent': 0,
+                urgent: 0,
+                approval: 0,
+                cancelled: 0,
+                done: 0,
+                'revision-done': 0,
+                'revision-urgent-done': 0,
+                'urgent-done': 0,
+                approved: 0
+            };
+
             data.forEach(p => {
                 const s = p.status?.trim().toLowerCase();
                 Object.entries(statusMap).forEach(([key, mappedStatus]) => {
@@ -285,7 +602,13 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                 if (p.has_dispute) counts.dispute++;
                 if (p.has_art_help) counts.arthelp++;
             });
+            counts.all = data.length; // Set 'all' count after iterating
             setProjectCounts(counts);
+            try {
+                localStorage.setItem('nova_projects_counts_cache', JSON.stringify(counts));
+            } catch (e) {
+                console.warn('LocalStorage quota exceeded for counts cache');
+            }
         }
     };
 
@@ -300,47 +623,189 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
     // 2. Reset to page 1 when filters or search change
     useEffect(() => {
         setCurrentPage(1);
-    }, [activeTab, alertFilter, debouncedSearchQuery, searchFilter]);
+    }, [activeTab, alertFilter, debouncedSearchQuery]);
 
-    // 3. Single synchronized fetch effect
+    // 3. Main projects fetch effect with sequencing to prevent multiple redundant fetches
     useEffect(() => {
         let isCancelled = false;
+
+        // Generate a parameter signature to detect actual changes
+        const paramsSignature = JSON.stringify({
+            role: userRole,
+            page: currentPage,
+            tab: activeTab,
+            alert: alertFilter,
+            search: debouncedSearchQuery
+        });
+
+        if (paramsSignature === lastFetchParamsRef.current && tableData && tableData.length > 0) {
+            return;
+        }
+
         const loadData = async () => {
-            // If it's the first load or filters changed significantly, we might want a full loading state
-            // But for a smooth experience, we'll manage 'loading' carefully
-            setLoading(true);
+            // Include page number in cache key to distinguish between different pages of the same tab
+            const cacheKey = `nova_projects_cache_${activeTab}_page_${currentPage}`;
+            const cached = localStorage.getItem(cacheKey);
+
+            // 1. Initial UI setup: Show skeletons only if NO cache OR if searching/changing page
+            let lastParams: any = null;
             try {
-                await Promise.all([
-                    fetchProjects(false), // Pass false to handle loading here instead
-                    fetchTabCounts()
-                ]);
-            } finally {
-                if (!isCancelled) setLoading(false);
+                if (lastFetchParamsRef.current && lastFetchParamsRef.current !== '{}') {
+                    lastParams = JSON.parse(lastFetchParamsRef.current);
+                }
+            } catch (e) {
+                console.error("Params parse error", e);
+            }
+
+            const isTabChange = lastParams && lastParams.tab !== activeTab;
+            const isPageChange = lastParams && lastParams.page !== currentPage;
+            const isSearching = !!debouncedSearchQuery.trim();
+
+            if (!cached || isPageChange || isSearching || isTabChange) {
+                setLoading(true);
+                // Clear UI to show skeletons only for search or page/fresh tab
+                if (!cached || isPageChange || isSearching) {
+                    setTableData(null);
+                } else if (isTabChange && cached) {
+                    // Synchronously update UI with cached data for the new tab
+                    try {
+                        setTableData(JSON.parse(cached));
+                    } catch (e) {
+                        setTableData(null);
+                    }
+                }
+            }
+
+            try {
+                await fetchProjects();
+                lastFetchParamsRef.current = paramsSignature;
+            } catch (err) {
+                console.error("Load error:", err);
+                setLoading(false);
             }
         };
+
         loadData();
         return () => { isCancelled = true; };
-    }, [profile, currentPage, activeTab, alertFilter, debouncedSearchQuery, searchFilter]);
+    }, [profile, effectiveRole, userRole, currentPage, activeTab, alertFilter, debouncedSearchQuery, isPermissionsReady]);
+
+    // 4. Tab counts effect - runs less frequently
+    useEffect(() => {
+        if (profile && effectiveRole) {
+            fetchTabCounts();
+        }
+    }, [profile, effectiveRole, userRole]);
 
 
     useEffect(() => {
         const fetchFreelancers = async () => {
             const { data, error } = await supabase
                 .from('profiles')
-                .select('id, name, email, role')
+                .select('id, name, email, role, daily_capacity')
                 .ilike('role', 'freelancer')
                 .order('name', { ascending: true });
 
-            if (!error && data) setTeamMembers(data);
+            if (!error && data) {
+                setAllFreelancers(data);
+                setTeamMembers(data); // Default to all initially
+            }
         };
         fetchFreelancers();
     }, []);
 
+    const fetchFreelancerWorkload = async () => {
+        try {
+            // Use SAME calendar-day window as the Workload section (midnight to end of today)
+            const todayStart = new Date();
+            todayStart.setHours(0, 0, 0, 0);
+            const todayEnd = new Date();
+            todayEnd.setHours(23, 59, 59, 999);
+
+            const { data: projects, error } = await supabase
+                .from('projects')
+                .select('assignee, status')
+                .gte('created_at', todayStart.toISOString())
+                .lte('created_at', todayEnd.toISOString());
+
+            if (error) throw error;
+
+            const stats: Record<string, { assigned: number, inProgress: number }> = {};
+            (projects || []).forEach(p => {
+                if (p.assignee) {
+                    if (!stats[p.assignee]) stats[p.assignee] = { assigned: 0, inProgress: 0 };
+                    stats[p.assignee].assigned += 1;
+
+                    // Match SAME done-detection logic as Workload.tsx
+                    const status = (p.status || '').toLowerCase();
+                    const isFinished = status.includes('done') || ['approved', 'delivered', 'cancelled'].includes(status);
+                    if (!isFinished) {
+                        stats[p.assignee].inProgress += 1;
+                    }
+                }
+            });
+            setFreelancerWorkload(stats);
+        } catch (err) {
+            console.error('Error fetching freelancer workload:', err);
+        }
+    };
+
+    useEffect(() => {
+        if (isModalOpen) {
+            fetchFreelancerWorkload();
+        }
+    }, [isModalOpen]);
+
+    // Smart Freelancer Filtering Logic
+    useEffect(() => {
+        const filterFreelancersByAccount = async () => {
+            if (!selectedAccount) {
+                setTeamMembers(allFreelancers);
+                return;
+            }
+
+            try {
+                // 1. Get Team ID linked to this account
+                const { data: teamAccount } = await supabase
+                    .from('team_accounts')
+                    .select('team_id')
+                    .eq('account_id', selectedAccount)
+                    .single();
+
+                if (teamAccount) {
+                    // 2. Get Freelancers in that team
+                    const { data: teamFreelancers } = await supabase
+                        .from('team_members')
+                        .select('member_id, profiles(id, name, email, role)')
+                        .eq('team_id', teamAccount.team_id);
+
+                    if (teamFreelancers && teamFreelancers.length > 0) {
+                        const filtered = teamFreelancers
+                            .filter((f: any) => f.profiles?.role?.toLowerCase().trim() === 'freelancer')
+                            .map((f: any) => f.profiles);
+
+                        if (filtered.length > 0) {
+                            setTeamMembers(filtered);
+                            return;
+                        }
+                    }
+                }
+
+                // Fallback to all freelancers if no team members found
+                setTeamMembers(allFreelancers);
+            } catch (err) {
+                console.error('Error filtering freelancers:', err);
+                setTeamMembers(allFreelancers);
+            }
+        };
+
+        filterFreelancersByAccount();
+    }, [selectedAccount, allFreelancers]);
+
     useEffect(() => {
         const fetchPMCollaborators = async () => {
             if (!profile) return;
-            const userRole = profile.role?.toLowerCase().trim();
-            if (userRole !== 'project manager' && userRole !== 'admin') {
+            const authorizedRoles = ['project manager', 'admin', 'super admin', 'project operations manager'];
+            if (!authorizedRoles.includes(userRole || '')) {
                 setPmCollaborators([]);
                 return;
             }
@@ -355,13 +820,15 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                 const { data: teamPMs } = await supabase
                     .from('team_members')
                     .select('member_id, profiles(id, name, email, role)')
-                    .in('team_id', teamIds)
-                    .neq('member_id', profile.id);
+                    .in('team_id', teamIds);
 
                 if (teamPMs) {
                     const uniquePMs = Array.from(new Map(
                         teamPMs
-                            .filter((m: any) => m.profiles?.role?.toLowerCase().trim() === 'project manager')
+                            .filter((m: any) => {
+                                const role = m.profiles?.role?.toLowerCase().trim();
+                                return role === 'project manager' || role === 'project operations manager';
+                            })
                             .map((m: any) => [m.profiles.id, m.profiles])
                     ).values());
                     setPmCollaborators(uniquePMs);
@@ -374,8 +841,8 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
             if (!profile) return;
             const userRole = profile.role?.toLowerCase().trim();
 
-            // Only fetch for Admin/PM
-            if (userRole !== 'project manager' && userRole !== 'admin') {
+            const authorizedRoles = ['project manager', 'admin', 'super admin', 'project operations manager'];
+            if (!authorizedRoles.includes(userRole || '')) {
                 setTeamPMs([]);
                 return;
             }
@@ -397,19 +864,22 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                 if (teamMembersRaw) {
                     const uniquePMs = Array.from(new Map(
                         teamMembersRaw
-                            .filter((m: any) => m.profiles?.role?.toLowerCase().trim() === 'project manager')
+                            .filter((m: any) => {
+                                const role = m.profiles?.role?.toLowerCase().trim();
+                                return role === 'project manager' || role === 'project operations manager';
+                            })
                             .map((m: any) => [m.profiles.id, m.profiles])
                     ).values());
 
                     // Filter to ensure unique by ID
                     setTeamPMs(uniquePMs);
                 }
-            } else if (userRole === 'admin') {
-                // Admins see all PMs if not in a team (fallback)
+            } else if (userRole === 'admin' || userRole === 'super admin' || userRole === 'project operations manager') {
+                // Admins & POMs see all PMs/POMs if not in a team (fallback)
                 const { data: allPMs } = await supabase
                     .from('profiles')
                     .select('id, name, email, role')
-                    .ilike('role', 'project manager');
+                    .or('role.ilike.project manager,role.ilike.project operations manager');
 
                 if (allPMs) setTeamPMs(allPMs);
             } else if (userRole === 'project manager') {
@@ -465,20 +935,6 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
         setProjectBriefFiles(prev => prev.filter((_, i) => i !== index));
     };
 
-    // Map tab IDs to their corresponding data status
-    const statusMap: Record<string, string> = useMemo(() => ({
-        'progress': 'In Progress',
-        'revision': 'Revision',
-        'revision-urgent': 'Revision Urgent',
-        'urgent': 'Urgent',
-        'approval': 'Sent For Approval',
-        'cancelled': 'Cancelled',
-        'done': 'Done',
-        'revision-done': 'Revision Done',
-        'revision-urgent-done': 'Revision Urgent Done',
-        'urgent-done': 'Urgent Done',
-        'approved': 'Approved'
-    }), []);
 
     const accountOptions = useMemo(() => {
         return accounts.map(acc => ({
@@ -493,40 +949,17 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
         return acc?.prefix || 'ARS';
     }, [accounts, selectedAccount]);
 
-    const filterOptions = [
-        { value: 'id', label: 'Project ID' },
-        { value: 'client', label: 'Client Name' },
-        { value: 'designer', label: 'Assignee' },
-        { value: 'title', label: 'Project Title' }
-    ];
 
-    const row1Tabs = [
-        { id: 'progress', label: `In Progress${tableData && projectCounts['progress'] > 0 ? ` ${projectCounts['progress']}` : ''}` },
-        { id: 'revision', label: `Revision${tableData && projectCounts['revision'] > 0 ? ` ${projectCounts['revision']}` : ''}` },
-        { id: 'revision-urgent', label: `Revision Urgent${tableData && projectCounts['revision-urgent'] > 0 ? ` ${projectCounts['revision-urgent']}` : ''}` },
-        { id: 'urgent', label: `Urgent${tableData && projectCounts['urgent'] > 0 ? ` ${projectCounts['urgent']}` : ''}` },
-        { id: 'approval', label: `Sent For Approval${tableData && projectCounts['approval'] > 0 ? ` ${projectCounts['approval']}` : ''}` },
-        { id: 'cancelled', label: `Cancelled${tableData && projectCounts['cancelled'] > 0 ? ` ${projectCounts['cancelled']}` : ''}` },
-    ];
-
-    const row2Tabs = [
-        { id: 'all', label: `All${tableData && projectCounts['all'] > 0 ? ` ${projectCounts['all']}` : ''}` },
-        { id: 'done', label: `Done${tableData && projectCounts['done'] > 0 ? ` ${projectCounts['done']}` : ''}` },
-        { id: 'revision-done', label: `Revision Done${tableData && projectCounts['revision-done'] > 0 ? ` ${projectCounts['revision-done']}` : ''}` },
-        { id: 'revision-urgent-done', label: `Revision Urgent Done${tableData && projectCounts['revision-urgent-done'] > 0 ? ` ${projectCounts['revision-urgent-done']}` : ''}` },
-        { id: 'urgent-done', label: `Urgent Done${tableData && projectCounts['urgent-done'] > 0 ? ` ${projectCounts['urgent-done']}` : ''}` },
-        { id: 'approved', label: `Approved${tableData && projectCounts['approved'] > 0 ? ` ${projectCounts['approved']}` : ''}` },
-    ];
 
     const columns = [
         { header: 'Project ID', key: 'id', className: 'w-36' },
         {
             header: 'Project Title',
             key: 'title',
-            className: 'min-w-[160px]',
+            className: 'min-w-[220px]',
             render: (item: any) => (
                 <div className="flex items-center gap-2">
-                    <span className="truncate text-white font-medium">{item.title}</span>
+                    <span className="text-white font-medium">{item.title}</span>
                     {item.hasDispute && (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium !bg-brand-error/10 !text-brand-error whitespace-nowrap">
                             Dispute
@@ -540,7 +973,19 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                 </div>
             )
         },
-        { header: 'Client Name', key: 'client', className: 'w-48' },
+        {
+            header: 'Client Name',
+            key: 'client',
+            className: 'w-48',
+            render: (item: any) => (
+                <div className="flex flex-col">
+                    <span className="text-white font-medium">{item.client}</span>
+                    {item.client_type === 'repeat' && (
+                        <span className="text-[10px] text-brand-primary font-bold uppercase tracking-widest">repeat</span>
+                    )}
+                </div>
+            )
+        },
         { header: 'Assignee', key: 'assignee', className: 'w-48', render: (item: any) => formatDisplayName(item.assignee) },
         {
             header: 'Deadline',
@@ -553,7 +998,19 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                 </div>
             )
         },
-        { header: 'Status', key: 'status', className: 'w-56' },
+        {
+            header: 'Status',
+            key: 'status',
+            className: 'w-56',
+            render: (item: any) => {
+                const status = item.status?.trim() || 'In Progress';
+                return (
+                    <span className={getStatusCapsuleClasses(status)}>
+                        {status}
+                    </span>
+                );
+            }
+        },
         ...(isFreelancer
             ? [{ header: 'Payout', key: 'payout', className: 'w-24 text-center', render: (item: any) => <span className="text-brand-success font-bold block w-full">{item.payout}</span> }]
             : [{ header: 'Price', key: 'price', className: 'w-24 text-center' }]
@@ -574,7 +1031,7 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
             className: 'w-20 text-right',
             render: (item: any) => (
                 <button
-                    onClick={() => onProjectOpen?.(item.id)}
+                    onClick={() => onProjectOpen?.(item.id, item)}
                     className="p-2 text-gray-400 hover:text-brand-primary hover:bg-brand-primary/10 rounded-xl transition-all duration-200 group active:scale-95 shadow-sm"
                 >
                     <IconChevronRight className="w-5 h-5 transition-transform duration-200 group-hover:translate-x-0.5" />
@@ -582,6 +1039,20 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
             )
         },
     ];
+
+    const handleDeadlineShortcut = (hours: number) => {
+        const now = new Date();
+        const futureDate = new Date(now.getTime() + hours * 60 * 60 * 1000);
+
+        // Update both date and time states
+        setDueDate(futureDate);
+
+        // Format time as HH:mm
+        const hh = String(futureDate.getHours()).padStart(2, '0');
+        const mm = String(futureDate.getMinutes()).padStart(2, '0');
+        setDueTime(`${hh}:${mm}`);
+        setActiveShortcut(hours);
+    };
 
     const handleReset = () => {
         setSelectedMove(null);
@@ -591,6 +1062,7 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
         setOtherSoldText('');
         setSelectedAccount(null);
         setLogoNoType(null);
+        setActiveShortcut(null);
         setManualLogoNo('');
         setClientType(null);
         setClientName('');
@@ -599,10 +1071,12 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
         setProjectTitle('');
         setProjectBriefText('');
         setProjectBriefFiles([]);
+        setOptionsRequired(null);
         setIsUploading(false);
         setAddons([]);
         setAddonsOther('');
         setIsBriefExpanded(false);
+        setBriefMode('edit');
         setDueDate(null);
         setDueTime('');
         setSelectedAssignee(null);
@@ -622,10 +1096,128 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
     };
 
     return (
-        <div className="space-y-6 animate-in fade-in duration-700">
+        <div className="flex flex-col min-h-full space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-700">
 
-            {/* Navigation & Controls Section */}
-            <div className="flex flex-col items-center gap-3.5">
+            {/* Mobile Navigation & Controls (md:hidden) */}
+            <div className="md:hidden flex flex-col gap-4 animate-in fade-in slide-in-from-bottom-2 duration-500 fill-mode-both">
+                {/* Status Expander */}
+                <div className="flex flex-col gap-2">
+                    <button
+                        onClick={() => setIsStatusExpanded(!isStatusExpanded)}
+                        className="flex items-center justify-between w-full h-14 px-5 bg-black/40 border border-white/5 rounded-2xl shadow-[inset_0_2px_4px_rgba(0,0,0,0.6)] group active:scale-[0.98] transition-all"
+                    >
+                        <span className="text-xs font-black uppercase tracking-[0.2em] text-gray-300">Check By Status</span>
+                        <IconChevronRight
+                            className={`w-5 h-5 text-gray-500 transition-transform duration-300 ${isStatusExpanded ? 'rotate-90 text-brand-primary' : ''}`}
+                        />
+                    </button>
+
+                    {isStatusExpanded && (
+                        <div className="flex flex-col gap-1.5 p-1.5 bg-black/40 border border-white/5 rounded-2xl shadow-[inset_0_2px_4px_rgba(0,0,0,0.6)] animate-in fade-in slide-in-from-top-2 duration-300">
+                            {[
+                                'all',
+                                'progress',
+                                'done',
+                                'urgent',
+                                'urgent-done',
+                                'revision',
+                                'revision-done',
+                                'revision-urgent',
+                                'revision-urgent-done',
+                                'approval',
+                                'approved',
+                                'cancelled'
+                            ].map((tabId) => {
+                                const tab = [...row1Tabs, ...row2Tabs].find(t => t.id === tabId);
+                                if (!tab) return null;
+                                const isActive = activeTab === tabId;
+
+                                return (
+                                    <button
+                                        key={tabId}
+                                        onClick={() => {
+                                            setActiveTab(tabId);
+                                            setIsStatusExpanded(false);
+                                        }}
+                                        className={`
+                                            relative flex items-center justify-center h-11 px-4 rounded-xl transition-all duration-300 text-[10px] font-black uppercase tracking-widest outline-none overflow-hidden
+                                            ${isActive ? 'text-white' : 'text-gray-500 hover:text-gray-300'}
+                                        `}
+                                    >
+                                        {isActive && (
+                                            <>
+                                                <div className="absolute inset-0 bg-gradient-to-b from-[#FF6B4B] to-[#D9361A] border border-[#FF6B4B]/50 shadow-[0_8px_15px_-2px_rgba(255,107,75,0.3),inset_0_1px_0_rgba(255,255,255,0.4)] rounded-xl animate-in fade-in zoom-in-95 duration-200" />
+                                                <div className="absolute inset-0 bg-[linear-gradient(135deg,transparent_0%,rgba(255,255,255,0.2)_50%,transparent_100%)] pointer-events-none opacity-50 z-10" />
+                                            </>
+                                        )}
+                                        <span className="relative z-20">{tab.label}</span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+
+                {/* Main Action Button */}
+                {!isFreelancer && (
+                    <Button
+                        variant="metallic"
+                        className="w-full !rounded-xl !py-4 font-black tracking-[0.2em] shadow-nova text-xs"
+                        onClick={() => setIsModalOpen(true)}
+                    >
+                        CHOOSE YOUR MOVE
+                    </Button>
+                )}
+
+                {/* Alerts & Filter Section */}
+                <div className="flex flex-col gap-2">
+                    <div className="flex gap-2">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setAlertFilter(prev => prev === 'dispute' ? null : 'dispute')}
+                            className={`
+                                flex-1 !rounded-xl transition-all duration-300 text-[9px] font-black h-12 uppercase tracking-widest px-4
+                                ${alertFilter === 'dispute'
+                                    ? '!bg-brand-error !text-white !border-brand-error shadow-[0_4px_12px_rgba(239,68,68,0.2)]'
+                                    : '!bg-brand-error/10 !text-brand-error !border-brand-error/20'
+                                }
+                            `}
+                        >
+                            Dispute{projectCounts['dispute'] > 0 ? ` ${projectCounts['dispute']}` : ''}
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setAlertFilter(prev => prev === 'arthelp' ? null : 'arthelp')}
+                            className={`
+                                flex-1 !rounded-xl transition-all duration-300 text-[9px] font-black h-12 uppercase tracking-widest px-4
+                                ${alertFilter === 'arthelp'
+                                    ? '!bg-brand-info !text-white !border-brand-info shadow-[0_4px_12px_rgba(14,165,233,0.2)]'
+                                    : '!bg-brand-info/10 !text-brand-info !border-brand-info/20'
+                                }
+                            `}
+                        >
+                            Art Help{projectCounts['arthelp'] > 0 ? ` ${projectCounts['arthelp']}` : ''}
+                        </Button>
+                    </div>
+
+
+                </div>
+
+                {/* Search Bar - Full Width */}
+                <Input
+                    variant="metallic"
+                    size="md"
+                    placeholder="Search by ID, Title, Assignee or Client..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    leftIcon={<IconSearch className="w-4 h-4" />}
+                    className="w-full !rounded-xl"
+                />
+            </div>
+            {/* Desktop Navigation & Header (hidden on mobile) */}
+            <div className="hidden md:flex flex-col gap-3">
                 {/* Row 1 Tabs - Centered horizontally */}
                 <div className="w-full flex justify-center">
                     <Tabs
@@ -660,100 +1252,86 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
 
             </div>
 
-            {/* Table Controls & Data Table */}
-            <div className="space-y-4">
-                <div className="flex items-center justify-between gap-4">
-                    {/* Secondary Actions - Top Left of Table */}
-                    <div className="flex items-center gap-3">
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setAlertFilter(prev => prev === 'dispute' ? null : 'dispute')}
-                            className={`
-                                rounded-xl border-transparent transition-all duration-300
-                                ${alertFilter === 'dispute'
-                                    ? '!bg-brand-error !text-white shadow-[0_0_15px_rgba(239,68,68,0.3)]'
-                                    : '!bg-brand-error/10 !text-brand-error hover:!bg-brand-error/20'
-                                }
-                                focus:!ring-brand-error/30 focus:!ring-offset-0 focus:!border-brand-error/40
-                            `}
-                        >
-                            Disputes{projectCounts['dispute'] > 0 ? ` ${projectCounts['dispute']}` : ''}
-                        </Button>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setAlertFilter(prev => prev === 'arthelp' ? null : 'arthelp')}
-                            className={`
-                                rounded-xl border-transparent transition-all duration-300
-                                ${alertFilter === 'arthelp'
-                                    ? '!bg-brand-info !text-white shadow-[0_0_15px_rgba(14,165,233,0.3)]'
-                                    : '!bg-brand-info/10 !text-brand-info hover:!bg-brand-info/20'
-                                }
-                                focus:!ring-brand-info/30 focus:!ring-offset-0 focus:!border-brand-info/40
-                            `}
-                        >
-                            Art Helps{projectCounts['arthelp'] > 0 ? ` ${projectCounts['arthelp']}` : ''}
-                        </Button>
-                    </div>
-
-                    {/* Search & Filter - Top Right of Table */}
-                    <div className="flex items-center gap-3">
-                        <div className="w-36 shrink-0">
-                            <Dropdown
-                                size="sm"
-                                variant="metallic"
-                                options={filterOptions}
-                                value={searchFilter}
-                                onChange={(val) => setSearchFilter(val)}
-                            />
-                        </div>
-                        <div className="w-64">
-                            <Input
-                                size="sm"
-                                variant="metallic"
-                                placeholder={`Search...`}
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                leftIcon={<IconSearch className="w-4 h-4" />}
-                                className="w-full"
-                            />
-                        </div>
-                    </div>
+            {/* Desktop-only secondary controls row */}
+            <div className="hidden md:flex items-center justify-between gap-4">
+                {/* Secondary Actions - Top Left of Table */}
+                <div className="flex items-center gap-3">
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setAlertFilter(prev => prev === 'dispute' ? null : 'dispute')}
+                        className={`
+                            rounded-xl border-transparent transition-all duration-300
+                            ${alertFilter === 'dispute'
+                                ? '!bg-brand-error !text-white shadow-[0_0_15px_rgba(239,68,68,0.3)]'
+                                : '!bg-brand-error/10 !text-brand-error hover:!bg-brand-error/20'
+                            }
+                            focus:!ring-brand-error/30 focus:!ring-offset-0 focus:!border-brand-error/40
+                        `}
+                    >
+                        Disputes{projectCounts['dispute'] > 0 ? ` ${projectCounts['dispute']}` : ''}
+                    </Button>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setAlertFilter(prev => prev === 'arthelp' ? null : 'arthelp')}
+                        className={`
+                            rounded-xl border-transparent transition-all duration-300
+                            ${alertFilter === 'arthelp'
+                                ? '!bg-brand-info !text-white shadow-[0_0_15px_rgba(14,165,233,0.3)]'
+                                : '!bg-brand-info/10 !text-brand-info hover:!bg-brand-info/20'
+                            }
+                            focus:!ring-brand-info/30 focus:!ring-offset-0 focus:!border-brand-info/40
+                        `}
+                    >
+                        Art Helps{projectCounts['arthelp'] > 0 ? ` ${projectCounts['arthelp']}` : ''}
+                    </Button>
                 </div>
 
-                <div className="relative">
-                    {loading && tableData && tableData.length > 0 && (
-                        <div className="absolute -top-1 left-0 w-full h-0.5 z-30 overflow-hidden bg-white/5 rounded-full">
-                            <div className="h-full bg-brand-primary animate-[shimmer_1.5s_infinite] origin-left w-1/3" />
-                        </div>
-                    )}
+                {/* Search - Top Right of Table */}
+                <div className="w-72">
+                    <Input
+                        size="sm"
+                        variant="metallic"
+                        placeholder="Search by ID, Title, Client or Assignee..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        leftIcon={<IconSearch className="w-4 h-4" />}
+                        rightIcon={null}
+                        className="w-full"
+                    />
+                </div>
+            </div>
+
+            <div className="flex-1 relative">
+                <div className={`h-full transition-all duration-300 ${loading ? 'min-h-[522px]' : ''}`}>
                     <Table
                         columns={columns}
                         data={tableData || []}
-                        emptyMessage="Your projects will appear here once they are loaded."
-                        isLoading={loading && !tableData}
+                        emptyMessage="No projects found."
+                        isLoading={loading}
+                        skeletonCount={ITEMS_PER_PAGE}
                         isMetallicHeader={true}
-                        className={`transition-all duration-300 ${loading && tableData ? 'opacity-60 grayscale-[0.5]' : 'opacity-100 grayscale-0'}`}
+                        className="projects-table"
                     />
                 </div>
-
-
-                {/* Pagination Controls */}
-                {totalCount > ITEMS_PER_PAGE && (
-                    <div className="flex justify-center pt-4 pb-8">
-                        <Pagination
-                            current={currentPage}
-                            total={Math.ceil(totalCount / ITEMS_PER_PAGE)}
-                            onChange={(page) => {
-                                setCurrentPage(page);
-                                // Scroll to top of table or page
-                                window.scrollTo({ top: 0, behavior: 'smooth' });
-                            }}
-                        />
-                    </div>
-                )}
             </div>
+
+
+            {/* Pagination Controls */}
+            {totalCount > ITEMS_PER_PAGE && (
+                <div className="flex justify-end">
+                    <Pagination
+                        current={currentPage}
+                        total={Math.ceil(totalCount / ITEMS_PER_PAGE)}
+                        onChange={(page) => {
+                            setCurrentPage(page);
+                            // Scroll to top of table or page
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                    />
+                </div>
+            )}
 
             {/* Choose Your Move Modal */}
             <Modal
@@ -762,6 +1340,7 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                     setIsModalOpen(false);
                     handleReset();
                 }}
+                closeOnOutsideClick={false}
                 title={(() => {
                     if (showReview) return "Final Review";
                     if (currentStep === 1) return "Choose Your Move";
@@ -883,9 +1462,11 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
 
                                                 if (err) throw err;
 
-                                            } else if (move === 'Cancel') {
-                                                console.log('Executing CANCEL');
-                                                const { error: err } = await supabase.from('projects')
+                                                // Fetch project for previous status before updating
+                                                const { data: proj } = await supabase.from('projects').select('status').eq('project_id', cancelProjectId).single();
+                                                const previousStatus = proj?.status || 'In Progress';
+
+                                                const { error: cancelError } = await supabase.from('projects')
                                                     .update({
                                                         action_move: 'Cancel',
                                                         cancellation_reason: cancellationReason === 'Other' ? cancellationOtherText : cancellationReason,
@@ -893,7 +1474,17 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                                                         updated_at: new Date().toISOString()
                                                     })
                                                     .eq('project_id', cancelProjectId);
-                                                if (err) throw err;
+                                                if (cancelError) throw cancelError;
+
+                                                // Insert Status Change Card
+                                                await supabase.from('project_comments').insert([{
+                                                    project_id: cancelProjectId,
+                                                    content: `STATUS_CHANGED:${previousStatus}:Cancelled`,
+                                                    author_name: profile?.name || 'User',
+                                                    author_role: profile?.role || 'Staff'
+                                                }]);
+
+                                                setActiveTab('cancelled');
 
                                             } else if (move === 'Approve') {
                                                 console.log('Executing APPROVE');
@@ -901,7 +1492,7 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                                                 // First, fetch the project to get assignee and platform commission details
                                                 const { data: projectData, error: fetchError } = await supabase
                                                     .from('projects')
-                                                    .select('assignee, platform_commission_id, price')
+                                                    .select('assignee, platform_commission_id, price, status')
                                                     .eq('project_id', approveProjectId)
                                                     .single();
 
@@ -924,20 +1515,37 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                                                     }
                                                 }
 
+                                                const previousStatus = projectData?.status || 'In Progress';
+
                                                 // Update project with approval and clearance tracking
-                                                const { error: err } = await supabase.from('projects')
+                                                const { error: approveError } = await supabase.from('projects')
                                                     .update({
                                                         action_move: 'Approve',
                                                         tips_given: approveTips === 'Yes',
                                                         tip_amount: approveTips === 'Yes' ? parseFloat(approveAmount) : 0,
                                                         status: 'Approved',
                                                         funds_status: 'Pending',
-                                                        clearance_start_date: new Date().toISOString().split('T')[0],
+                                                        due_date: date ? (date instanceof Date ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}` : String(date).split('T')[0]) : null,
+                                                        due_time: time,
+                                                        clearance_start_date: (() => {
+                                                            const d = new Date();
+                                                            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                                                        })(),
                                                         clearance_days: clearanceDays,
                                                         updated_at: new Date().toISOString()
                                                     })
                                                     .eq('project_id', approveProjectId);
-                                                if (err) throw err;
+                                                if (approveError) throw approveError;
+
+                                                // Insert Status Change Card
+                                                await supabase.from('project_comments').insert([{
+                                                    project_id: approveProjectId,
+                                                    content: `STATUS_CHANGED:${previousStatus}:Approved`,
+                                                    author_name: profile?.name || 'User',
+                                                    author_role: profile?.role || 'Staff'
+                                                }]);
+
+                                                setActiveTab('approved');
 
                                             } else if (move === 'Add') {
                                                 // ADD Branch
@@ -964,7 +1572,10 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                                                 const d: any = date;
                                                 try {
                                                     if (d instanceof Date) {
-                                                        formattedDate = d.toISOString().split('T')[0];
+                                                        const yyyy = d.getFullYear();
+                                                        const mm = String(d.getMonth() + 1).padStart(2, '0');
+                                                        const dd_date = String(d.getDate()).padStart(2, '0');
+                                                        formattedDate = `${yyyy}-${mm}-${dd_date}`;
                                                     } else if (typeof d === 'string' && d.includes('T')) {
                                                         formattedDate = d.split('T')[0];
                                                     } else {
@@ -1018,17 +1629,19 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                                                     account: accountName,
                                                     account_id: account,
                                                     client_type: client,
-                                                    client_name: client === 'new' ? name : null,
-                                                    previous_logo_no: client === 'old' ? prevLogo : null,
+                                                    client_name: client === 'repeat' ? name : name,
+                                                    previous_logo_no: client === 'repeat' ? prevLogo : null,
                                                     items_sold: itemsSoldJson,
                                                     addons: addonsJson,
                                                     medium: projectMedium,
                                                     price: parseFloat(String(projectPriceString).replace(/[^0-9.]/g, '')) || 0,
                                                     brief: brief,
+                                                    options_required: optionsRequired ? parseInt(optionsRequired) : null,
                                                     attachments: attachmentsJson, // Added attachments
                                                     due_date: formattedDate,
                                                     due_time: time,
                                                     converted_by: convertedBy,
+                                                    order_type: type,
                                                     assignee: assignee,
                                                     primary_manager_id: primaryManagerId,
                                                     collaborators: finalCollaborators,
@@ -1044,15 +1657,48 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
 
                                                 if (insertError) throw insertError;
 
+                                                // Best Approach: Insert into relational collaborators table
+                                                if (insertedData && insertedData[0] && finalCollaborators.length > 0) {
+                                                    const collabPayload = finalCollaborators.map(c => ({
+                                                        project_id: insertedData[0].project_id,
+                                                        member_id: c.id,
+                                                        role: c.role || 'Collaborator'
+                                                    }));
+
+                                                    const { error: collabError } = await supabase
+                                                        .from('project_collaborators')
+                                                        .insert(collabPayload);
+
+                                                    if (collabError) {
+                                                        console.error('Relational Collaborator Insert Error:', collabError);
+                                                        // We don't throw here to avoid failing project creation if only collaborators fail
+                                                    }
+                                                }
+
                                                 const inserted = insertedData && insertedData[0];
                                                 if (inserted) {
                                                     console.log('Insertion confirmed:', inserted.project_id);
+
+                                                    // Create PROJECT ASSIGNED activity record for the timeline
+                                                    const activityPayload = {
+                                                        project_id: inserted.project_id,
+                                                        content: `PROJECT_ASSIGNED|${new Date().toISOString()}|${inserted.assignee || 'Unassigned'}`,
+                                                        author_name: profile?.name || 'User',
+                                                        author_role: effectiveRole || 'User',
+                                                        created_at: new Date().toISOString()
+                                                    };
+
+                                                    supabase.from('project_comments').insert([activityPayload]).then(({ error }) => {
+                                                        if (error) console.error('BG Activity Creation Error:', error);
+                                                    });
 
                                                     const newProject = {
                                                         id: inserted.project_id,
                                                         title: inserted.project_title || 'Untitled',
                                                         client: inserted.client_name || inserted.client_type || 'Unknown',
                                                         assignee: inserted.assignee || 'Unassigned',
+                                                        order_type: inserted.order_type,
+                                                        converted_by: inserted.converted_by,
                                                         dueDate: formatDeadlineDate(inserted.due_date),
                                                         dueTime: inserted.due_time ? inserted.due_time.substring(0, 5) : '',
                                                         status: inserted.status,
@@ -1064,12 +1710,25 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                                                     setTableData(prev => [newProject, ...(prev || [])]);
 
                                                     // Silent side effects
-                                                    addNotification({
-                                                        type: 'project_created',
-                                                        reference_id: inserted.project_id,
-                                                        message: `New project created: ${inserted.project_title || 'Untitled'}`,
-                                                        is_read: false
-                                                    }).catch(e => console.error('BG Notification Error:', e));
+                                                    const assigneeProfile = allFreelancers.find(f => f.name === inserted.assignee || f.email === inserted.assignee);
+                                                    if (assigneeProfile) {
+                                                        addNotification({
+                                                            type: 'project_assigned',
+                                                            reference_id: inserted.project_id,
+                                                            message: `You have been assigned to: ${inserted.project_title || 'Untitled'}`,
+                                                            user_id: assigneeProfile.id,
+                                                            is_read: false
+                                                        }).catch(e => console.error('BG Notification Error:', e));
+                                                    } else {
+                                                        // Fallback global notification if assignee profile not found (optional, but keep it clean)
+                                                        addNotification({
+                                                            type: 'project_created',
+                                                            reference_id: inserted.project_id,
+                                                            message: `New project created: ${inserted.project_title || 'Untitled'}`,
+                                                            user_id: null, // Global if no user targeted
+                                                            is_read: false
+                                                        }).catch(e => console.error('BG Notification Error:', e));
+                                                    }
 
                                                     triggerWebhooks('projectCreated', {
                                                         ...inserted,
@@ -1083,7 +1742,7 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                                                 }
                                             }
 
-                                            addToast({ type: 'success', title: 'Success', message: 'Project details submitted successfully' });
+                                            addToast({ type: 'success', title: 'Success', message: 'Project details submitted successfully', silent: true });
 
                                             if (move !== 'Add') {
                                                 await fetchProjects();
@@ -1621,14 +2280,47 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                             {currentStep === 12 && (
                                 <div className="space-y-6">
                                     <div className="space-y-4">
-                                        <TextArea
+                                        <Input
                                             variant="metallic"
-                                            placeholder="Type here"
-                                            value={projectBriefText}
-                                            onChange={(e) => setProjectBriefText(e.target.value)}
-                                            onExpand={() => setIsBriefExpanded(true)}
-                                            className="min-h-[140px]"
+                                            label="Options Required"
+                                            placeholder="How Many Options Required?"
+                                            type="number"
+                                            min={1}
+                                            max={20}
+                                            value={optionsRequired || ''}
+                                            onChange={(e) => setOptionsRequired(e.target.value)}
                                         />
+                                        <div className="flex justify-start mb-6">
+                                            <Tabs
+                                                tabs={[
+                                                    { id: 'edit', label: 'Edit' },
+                                                    { id: 'preview', label: 'Preview' }
+                                                ]}
+                                                activeTab={briefMode}
+                                                onTabChange={(id) => setBriefMode(id as 'edit' | 'preview')}
+                                            />
+                                        </div>
+
+                                        {briefMode === 'edit' ? (
+                                            <TextArea
+                                                variant="metallic"
+                                                placeholder="Describe the project..."
+                                                value={projectBriefText}
+                                                onChange={(e) => setProjectBriefText(e.target.value)}
+                                                onExpand={() => setIsBriefExpanded(true)}
+                                                className="min-h-[140px]"
+                                            />
+                                        ) : (
+                                            <div className="min-h-[140px] p-6 bg-black/40 rounded-3xl border border-white/5 shadow-[inset_0_4px_24px_rgba(0,0,0,0.5)]">
+                                                {projectBriefText.trim() ? (
+                                                    <ReactMarkdown components={markdownComponents} remarkPlugins={markdownPlugins}>
+                                                        {parseCodesLogicMarkdown(projectBriefText)}
+                                                    </ReactMarkdown>
+                                                ) : (
+                                                    <p className="text-gray-500 italic text-sm">Nothing to preview. Start typing...</p>
+                                                )}
+                                            </div>
+                                        )}
                                         <div className="flex flex-col gap-2 mt-4">
                                             <div
                                                 onClick={() => !isUploading && fileInputRef.current?.click()}
@@ -1683,7 +2375,7 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                                                             else if (ext === 'png') iconName = 'png-icon.png';
                                                             else if (['doc', 'docx'].includes(ext)) iconName = 'doc-icon.png';
                                                             else if (ext === 'pdf') iconName = 'pdf-icon.png';
-                                                            else if (ext === 'ai') iconName = 'ai-icon.png';
+                                                            else if (ext === 'ai') iconName = 'ai-document.png';
                                                             else if (ext === 'psd') iconName = 'psd-icon.png';
                                                             else if (['zip', 'rar', '7z'].includes(ext)) iconName = 'zip-icon.png';
                                                             else if (['mp4', 'mov', 'avi'].includes(ext)) iconName = 'avi-icon.png';
@@ -1773,12 +2465,33 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                             {currentStep === 14 && (
                                 <div className="space-y-6">
                                     <div className="space-y-6">
-                                        # Note: removed h3 but kept spacing
+                                        {/* Shortcuts */}
+                                        <div className="flex flex-wrap gap-2 mb-2">
+                                            {[2, 6, 8, 12, 24].map((hours) => (
+                                                <Button
+                                                    key={hours}
+                                                    variant="recessed"
+                                                    size="sm"
+                                                    disabled={isReviewLoading}
+                                                    onClick={() => handleDeadlineShortcut(hours)}
+                                                    className={`!px-3 !py-1.5 !h-auto !text-[10px] font-bold uppercase tracking-wider transition-all duration-300 transform active:scale-95 ${activeShortcut === hours
+                                                        ? '!text-white !border-white/20 !bg-white/10'
+                                                        : ''
+                                                        }`}
+                                                >
+                                                    {hours} Hrs
+                                                </Button>
+                                            ))}
+                                        </div>
+
                                         {/* Date Picker */}
                                         <DatePicker
                                             variant="metallic"
                                             value={dueDate}
-                                            onChange={(date) => setDueDate(date)}
+                                            onChange={(date) => {
+                                                setDueDate(date);
+                                                setActiveShortcut(null);
+                                            }}
                                             disabled={isReviewLoading}
                                         />
 
@@ -1787,7 +2500,10 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                                             variant="metallic"
                                             placeholder="Select time"
                                             value={dueTime}
-                                            onChange={(val) => setDueTime(val)}
+                                            onChange={(val) => {
+                                                setDueTime(val);
+                                                setActiveShortcut(null);
+                                            }}
                                             disabled={isReviewLoading}
                                         />
                                     </div>
@@ -1797,13 +2513,37 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                             {currentStep === 15 && (
                                 <div className="space-y-6">
                                     <div className="space-y-4">
-                                        # Note: removed h3
                                         <Dropdown
                                             variant="metallic"
                                             placeholder="Select Assignee"
                                             options={teamMembers
                                                 .filter(m => m.role?.trim().toLowerCase() === 'freelancer')
-                                                .map(m => ({ label: m.name, value: m.name }))
+                                                .sort((a, b) => {
+                                                    const statA = freelancerWorkload[a.name || a.email] || { assigned: 0 };
+                                                    const statB = freelancerWorkload[b.name || b.email] || { assigned: 0 };
+                                                    const remA = (a.daily_capacity || 5) - statA.assigned;
+                                                    const remB = (b.daily_capacity || 5) - statB.assigned;
+                                                    return remB - remA;
+                                                })
+                                                .map(m => {
+                                                    const name = m.name || m.email;
+                                                    const stat = freelancerWorkload[name] || { assigned: 0, inProgress: 0 };
+                                                    const capacity = m.daily_capacity || 5;
+                                                    const usage = stat.assigned / capacity;
+
+                                                    const descriptionClassName = usage >= 1.0
+                                                        ? 'bg-brand-error/20 border-brand-error/30 text-brand-error'
+                                                        : usage > 0.4
+                                                            ? 'bg-brand-warning/20 border-brand-warning/30 text-brand-warning'
+                                                            : 'bg-brand-success/20 border-brand-success/30 text-brand-success';
+
+                                                    return {
+                                                        label: name,
+                                                        value: name,
+                                                        description: `${stat.assigned} / ${capacity}`,
+                                                        descriptionClassName
+                                                    };
+                                                })
                                             }
                                             value={selectedAssignee || ''}
                                             onChange={(val) => setSelectedAssignee(val)}
@@ -1879,7 +2619,7 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
 
                                 {selectedMove === 'Add' && (
                                     <div className="space-y-10">
-                                        {/* GROUP 1 — MOVE & ORDER */}
+                                        {/* GROUP 1 â€” MOVE & ORDER */}
                                         <div className="space-y-6">
                                             <h4 className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.2em] px-1">Move & Order</h4>
                                             <div className="space-y-6">
@@ -1921,7 +2661,7 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
 
                                         <div className="h-px bg-surface-border/30 w-full" />
 
-                                        {/* GROUP 2 — PRICE & ITEMS */}
+                                        {/* GROUP 2 â€” PRICE & ITEMS */}
                                         <div className="space-y-6">
                                             <h4 className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.2em] px-1">Price & Items</h4>
                                             <div className="space-y-8">
@@ -1978,7 +2718,7 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
 
                                         <div className="h-px bg-surface-border/30 w-full" />
 
-                                        {/* GROUP 3 — PROJECT IDENTITY */}
+                                        {/* GROUP 3 â€” PROJECT IDENTITY */}
                                         <div className="space-y-6">
                                             <h4 className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.2em] px-1">Project Identity</h4>
                                             <div className="space-y-8">
@@ -2049,7 +2789,7 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
 
                                         <div className="h-px bg-surface-border/30 w-full" />
 
-                                        {/* GROUP 4 — ITEMS & MEDIUM */}
+                                        {/* GROUP 4 â€” ITEMS & MEDIUM */}
                                         <div className="space-y-6">
                                             <h4 className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.2em] px-1">Items & Medium</h4>
                                             <div className="space-y-8">
@@ -2080,14 +2820,25 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
 
                                                 <div className="space-y-4">
                                                     <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider ml-1">Project Brief</label>
-                                                    <TextArea
+                                                    <Input
                                                         variant="metallic"
-                                                        placeholder="Describe the project..."
-                                                        value={projectBriefText}
-                                                        onChange={(e) => setProjectBriefText(e.target.value)}
-                                                        rows={4}
-                                                        onExpand={() => setIsBriefExpanded(true)}
+                                                        label="Options Required"
+                                                        placeholder="How Many Options Required?"
+                                                        type="number"
+                                                        min={1}
+                                                        max={20}
+                                                        value={optionsRequired || ''}
+                                                        onChange={(e) => setOptionsRequired(e.target.value)}
                                                     />
+                                                    {projectBriefText.trim() ? (
+                                                        <div className="p-6 bg-black/40 rounded-3xl border border-white/5 shadow-[inset_0_4px_24px_rgba(0,0,0,0.5)]">
+                                                            <ReactMarkdown components={markdownComponents} remarkPlugins={markdownPlugins}>
+                                                                {parseCodesLogicMarkdown(projectBriefText)}
+                                                            </ReactMarkdown>
+                                                        </div>
+                                                    ) : (
+                                                        <p className="text-gray-500 italic text-sm">No brief provided.</p>
+                                                    )}
 
                                                     {/* Attachments Preview in Review */}
                                                     {projectBriefFiles.length > 0 && (
@@ -2103,7 +2854,7 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                                                                         else if (ext === 'png') iconName = 'png-icon.png';
                                                                         else if (['doc', 'docx'].includes(ext)) iconName = 'doc-icon.png';
                                                                         else if (ext === 'pdf') iconName = 'pdf-icon.png';
-                                                                        else if (ext === 'ai') iconName = 'ai-icon.png';
+                                                                        else if (ext === 'ai') iconName = 'ai-document.png';
                                                                         else if (ext === 'psd') iconName = 'psd-icon.png';
                                                                         else if (['zip', 'rar', '7z'].includes(ext)) iconName = 'zip-icon.png';
                                                                         else if (['mp4', 'mov', 'avi'].includes(ext)) iconName = 'avi-icon.png';
@@ -2139,10 +2890,29 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
 
                                         <div className="h-px bg-surface-border/30 w-full" />
 
-                                        {/* GROUP 5 — TIMELINE & ADDONS */}
+                                        {/* GROUP 5 â€” TIMELINE & ADDONS */}
                                         <div className="space-y-6">
                                             <h4 className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.2em] px-1">Timeline & Addons</h4>
+
                                             <div className="space-y-8">
+                                                {/* Shortcuts in Review section */}
+                                                <div className="flex flex-wrap gap-2">
+                                                    {[2, 6, 8, 12, 24].map((hours) => (
+                                                        <Button
+                                                            key={hours}
+                                                            variant="recessed"
+                                                            size="sm"
+                                                            onClick={() => handleDeadlineShortcut(hours)}
+                                                            className={`!px-3 !py-1.5 !h-auto !text-[10px] font-bold uppercase tracking-wider transition-all duration-300 transform active:scale-95 ${activeShortcut === hours
+                                                                ? '!text-white !border-white/20 !bg-white/10'
+                                                                : ''
+                                                                }`}
+                                                        >
+                                                            {hours} Hrs
+                                                        </Button>
+                                                    ))}
+                                                </div>
+
                                                 <div className="grid grid-cols-2 gap-6">
                                                     <DatePicker
                                                         label="Due Date"
@@ -2186,7 +2956,7 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
 
                                         <div className="h-px bg-surface-border/30 w-full" />
 
-                                        {/* GROUP 6 — ASSIGNEE */}
+                                        {/* GROUP 6 â€” ASSIGNEE */}
                                         <div className="space-y-6">
                                             <h4 className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.2em] px-1">Assignee</h4>
                                             <Dropdown
@@ -2194,7 +2964,32 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                                                 label="Assignee"
                                                 options={teamMembers
                                                     .filter(m => m.role?.trim().toLowerCase() === 'freelancer')
-                                                    .map(m => ({ label: m.name, value: m.name }))
+                                                    .sort((a, b) => {
+                                                        const statA = freelancerWorkload[a.name || a.email] || { assigned: 0 };
+                                                        const statB = freelancerWorkload[b.name || b.email] || { assigned: 0 };
+                                                        const remA = (a.daily_capacity || 5) - statA.assigned;
+                                                        const remB = (b.daily_capacity || 5) - statB.assigned;
+                                                        return remB - remA;
+                                                    })
+                                                    .map(m => {
+                                                        const name = m.name || m.email;
+                                                        const stat = freelancerWorkload[name] || { assigned: 0, inProgress: 0 };
+                                                        const capacity = m.daily_capacity || 5;
+                                                        const usage = stat.assigned / capacity;
+
+                                                        const descriptionClassName = usage >= 1.0
+                                                            ? 'bg-brand-error/20 border-brand-error/30 text-brand-error'
+                                                            : usage > 0.4
+                                                                ? 'bg-brand-warning/20 border-brand-warning/30 text-brand-warning'
+                                                                : 'bg-brand-success/20 border-brand-success/30 text-brand-success';
+
+                                                        return {
+                                                            label: name,
+                                                            value: name,
+                                                            description: `${stat.assigned} / ${capacity}`,
+                                                            descriptionClassName
+                                                        };
+                                                    })
                                                 }
                                                 value={selectedAssignee || ''}
                                                 onChange={setSelectedAssignee}
@@ -2270,9 +3065,9 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
 
                                         <div className="h-px bg-surface-border/30 w-full" />
 
-                                        {/* GROUP 3: PROJECT IDENTIFICATION */}
+                                        {/* GROUP 3: DETAILS */}
                                         <div className="space-y-6">
-                                            <h4 className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.2em] px-1">Project Identification</h4>
+                                            <h4 className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.2em] px-1">Details</h4>
                                             <div className="space-y-6">
                                                 <Input
                                                     variant="metallic"
@@ -2348,9 +3143,9 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
 
                                         <div className="h-px bg-surface-border/30 w-full" />
 
-                                        {/* GROUP 2: PROJECT IDENTIFICATION */}
+                                        {/* GROUP 2: DETAILS */}
                                         <div className="space-y-6">
-                                            <h4 className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.2em] px-1">Project Identification</h4>
+                                            <h4 className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.2em] px-1">Details</h4>
                                             <div className="space-y-6">
                                                 <Input
                                                     variant="metallic"
@@ -2383,19 +3178,44 @@ const Projects = forwardRef<ProjectsHandle, ProjectsProps>(({ onProjectOpen, isP
                     </div>
                 )}
             >
-                <div className="h-full min-h-[400px]">
-                    <TextArea
-                        variant="metallic"
-                        placeholder="Type here"
-                        value={projectBriefText}
-                        onChange={(e) => setProjectBriefText(e.target.value)}
-                        className="h-full"
-                        rows={15}
-                        autoFocus
-                    />
+                <div className="flex flex-col">
+                    <div className="flex justify-start mb-6 shrink-0">
+                        <Tabs
+                            tabs={[
+                                { id: 'edit', label: 'Edit' },
+                                { id: 'preview', label: 'Preview' }
+                            ]}
+                            activeTab={briefMode}
+                            onTabChange={(id) => setBriefMode(id as 'edit' | 'preview')}
+                        />
+                    </div>
+
+                    <div className="select-text pb-8">
+                        {briefMode === 'edit' ? (
+                            <TextArea
+                                variant="metallic"
+                                placeholder="Type here"
+                                value={projectBriefText}
+                                onChange={(e) => setProjectBriefText(e.target.value)}
+                                className="w-full"
+                                inputClassName="!min-h-[400px]"
+                                autoFocus
+                            />
+                        ) : (
+                            <div className="p-6 bg-black/40 rounded-3xl border border-white/5 shadow-[inset_0_4px_24px_rgba(0,0,0,0.5)] min-h-[400px]">
+                                {projectBriefText.trim() ? (
+                                    <ReactMarkdown components={markdownComponents} remarkPlugins={markdownPlugins}>
+                                        {parseCodesLogicMarkdown(projectBriefText)}
+                                    </ReactMarkdown>
+                                ) : (
+                                    <p className="text-gray-500 italic text-sm">Nothing to preview. Start typing...</p>
+                                )}
+                            </div>
+                        )}
+                    </div>
                 </div>
             </Modal>
-        </div>
+        </div >
     );
 });
 

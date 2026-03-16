@@ -20,6 +20,8 @@ interface UserProfile {
     cnic_back_url?: string;
     has_seen_welcome?: boolean;
     payment_email?: string;
+    preferred_payment_method?: string;
+    daily_capacity?: number | null;
 }
 
 interface UserContextType {
@@ -37,7 +39,11 @@ interface UserContextType {
 const UserContext = createContext<UserContextType | undefined>(undefined);
 
 export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-    const [profile, setProfile] = useState<UserProfile | null>(null);
+    const [profile, setProfile] = useState<UserProfile | null>(() => {
+        // Load initial profile from cache for instant UI (Avatar) load
+        const cached = localStorage.getItem('user_profile_cache');
+        return cached ? JSON.parse(cached) : null;
+    });
     const [loading, setLoading] = useState(true);
     const [permissionsLoaded, setPermissionsLoaded] = useState(false);
     const [simulatedRole, setSimulatedRoleState] = useState<string | null>(localStorage.getItem('nova_simulated_role'));
@@ -45,6 +51,7 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const [previewPermissions, setPreviewPermissions] = useState<string[] | null>(null);
 
     const setSimulatedRole = (role: string | null, preview?: string[]) => {
+        setPermissionsLoaded(false);
         if (role) {
             localStorage.setItem('nova_simulated_role', role);
             if (preview) {
@@ -91,6 +98,8 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             return previewPermissions.includes(code);
         }
 
+        if (effectiveRole === 'Super Admin') return true;
+
         return permissions.includes(code);
     };
 
@@ -125,6 +134,7 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     const fetchProfile = async () => {
         setLoading(true);
+        setPermissionsLoaded(false);
         try {
             const { data: { session: currentSession } } = await supabase.auth.getSession();
             if (!currentSession) {
@@ -143,6 +153,7 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
             if (!error && data) {
                 setProfile(data);
+                localStorage.setItem('user_profile_cache', JSON.stringify(data));
             } else {
                 setProfile(null);
                 setPermissions([]);
@@ -168,6 +179,17 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                 fetchProfile();
             } else if (event === 'SIGNED_OUT') {
                 setProfile(null);
+                localStorage.removeItem('user_profile_cache');
+                
+                // Clear all project related caches
+                Object.keys(localStorage).forEach(key => {
+                    if (key.startsWith('nova_projects_cache') || 
+                        key.startsWith('nova_project_detail') || 
+                        key.startsWith('nova_projects_total_count')) {
+                        localStorage.removeItem(key);
+                    }
+                });
+
                 setPermissions([]);
                 setPermissionsLoaded(true);
                 setSimulatedRole(null);
@@ -196,7 +218,20 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                 },
                 (payload) => {
                     console.log('👤 Profile updated in real-time:', payload.new);
-                    setProfile(payload.new as UserProfile);
+                    const updatedProfile = payload.new as UserProfile;
+                    setProfile(updatedProfile);
+                    localStorage.setItem('user_profile_cache', JSON.stringify(updatedProfile));
+
+                    // CODE ADDED: Sync back to general users cache so it reflects in the Members table too
+                    const cachedUsers = localStorage.getItem('nova_users_cache');
+                    if (cachedUsers) {
+                        const users = JSON.parse(cachedUsers);
+                        const index = users.findIndex((u: any) => u.id === updatedProfile.id);
+                        if (index !== -1) {
+                            users[index] = { ...users[index], ...updatedProfile };
+                            localStorage.setItem('nova_users_cache', JSON.stringify(users));
+                        }
+                    }
                 }
             )
             .subscribe((status) => {

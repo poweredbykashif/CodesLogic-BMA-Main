@@ -29,9 +29,10 @@ export const Dropdown: React.FC<DropdownProps> = ({
   const menuRef = useRef<HTMLDivElement>(null);
 
   const sizes = {
-    sm: 'h-[34px] px-3 py-0 text-xs',
-    md: 'px-4 py-3 text-sm',
-    lg: 'px-4 py-4 text-base'
+    sm: 'h-10 px-3 py-2 text-sm',
+    md: 'h-12 px-4 py-2 text-base',
+    lg: 'h-14 px-5 py-3 text-lg',
+    none: ''
   };
 
   // Helper to check if a value is selected
@@ -166,13 +167,15 @@ export const Dropdown: React.FC<DropdownProps> = ({
       )}
 
       <div className="flex items-center justify-between flex-1 overflow-hidden gap-4">
-        <span className={`font-semibold text-sm truncate transition-colors duration-200 ${isSelected ? 'text-brand-primary' : 'text-gray-100 group-hover:text-white'}`}>
+        <span className={`font-semibold text-sm transition-colors duration-200 ${option.labelClassName || 'truncate'} ${isSelected ? 'text-brand-primary' : 'text-gray-100 group-hover:text-white'}`}>
           {option.label}
         </span>
         {option.description && (
-          <span className={`inline-flex items-center px-1.5 py-0.5 rounded-lg border text-[10px] font-black uppercase tracking-tighter shrink-0 transition-all ${isSelected
-            ? 'bg-brand-primary/20 border-brand-primary/30 text-brand-primary'
-            : 'bg-white/5 border-white/10 text-gray-500 group-hover:bg-white/10 group-hover:border-white/20 group-hover:text-gray-400'
+          <span className={`inline-flex items-center px-1.5 py-0.5 rounded-lg border text-[10px] font-black uppercase tracking-tighter shrink-0 transition-all whitespace-pre-line text-center ${option.descriptionClassName
+            ? option.descriptionClassName
+            : isSelected
+              ? 'bg-brand-primary/20 border-brand-primary/30 text-brand-primary'
+              : 'bg-white/5 border-white/10 text-gray-500 group-hover:bg-white/10 group-hover:border-white/20 group-hover:text-gray-400'
             }`}>
             {option.description}
           </span>
@@ -293,13 +296,15 @@ export const Dropdown: React.FC<DropdownProps> = ({
           type="button"
           disabled={disabled}
           onClick={handleToggle}
-          className={`w-full flex items-center justify-between transition-all duration-300 ease-out outline-none rounded-xl ${sizes[size]} text-white disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer border relative overflow-hidden ${variant === 'metallic'
-            ? 'bg-black/40 border-white/[0.05] font-bold shadow-[inset_0_2px_8px_rgba(0,0,0,0.6)] focus:bg-black/60 outline-none'
-            : `bg-surface-input border-2 focus:border-brand-primary outline-none ${error ? 'border-brand-error' : isOpen ? 'border-brand-primary' : 'border-surface-border'}`
+          className={`w-full flex items-center justify-between transition-all duration-300 ease-out outline-none rounded-xl ${sizes[size]} text-white disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer border relative overflow-hidden ${variant === 'metallic' || variant === 'recessed'
+            ? 'bg-black/40 border-white/[0.05] font-bold shadow-[inset_0_2px_8px_rgba(0,0,0,0.6)] focus:bg-black/60 focus:outline-none focus:ring-0 outline-none'
+            : variant === 'flat'
+              ? 'bg-transparent border-none text-sm focus:bg-white/[0.02] outline-none focus:outline-none focus:ring-0 shadow-none'
+              : `bg-surface-input border-2 focus:border-brand-primary outline-none focus:outline-none focus:ring-0 ${error ? 'border-brand-error' : isOpen ? 'border-brand-primary' : 'border-surface-border'}`
             }`}
         >
           {/* Metallic Depth Overlay for Recessed Dropdown */}
-          {variant === 'metallic' && (
+          {(variant === 'metallic' || variant === 'recessed') && (
             <div className="absolute inset-0 pointer-events-none">
               {/* Inner Top Shadow for carved-in look */}
               <div className="absolute top-0 left-0 right-0 h-4 bg-gradient-to-b from-black/60 to-transparent" />

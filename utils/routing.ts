@@ -12,12 +12,27 @@ const VIEW_MAP: Record<string, DashboardView> = {
     'assets': 'Assets',
     'chats': 'Chats',
     'users': 'Users',
+    'workload': 'Workload',
+    'tickets': 'Tickets',
     'channels': 'Channels',
     'forms': 'Forms',
     'integrations': 'Integrations',
     'settings': 'Settings',
     'reminders': 'Reminders',
-    'profile': 'Profile'
+    'profile': 'Profile',
+    'user-details-v2': 'UserDetailsV2',
+    'algorithm-studio': 'AlgorithmStudio',
+    'applicants': 'Applicants',
+    'guide': 'Guide',
+    'guide-add-project': 'GuideAddProject',
+    'guide-remove-project': 'GuideRemoveProject',
+    'guide-mark-cancelled': 'GuideMarkCancelled',
+    'guide-mark-approved': 'GuideMarkApproved',
+    'guide-trigger-dispute': 'GuideTriggerDispute',
+    'guide-trigger-art-help': 'GuideTriggerArtHelp',
+    'guide-post-comments': 'GuidePostComments',
+    'guide-send-files': 'GuideSendFiles',
+    'platformoverviewfordesigners': 'PlatformOverview'
 };
 
 export const PATH_MAP: Record<DashboardView, string> = Object.entries(VIEW_MAP).reduce((acc, [path, view]) => {
@@ -35,7 +50,12 @@ export const getInitialView = (): { view: DashboardView; projectId: string | nul
 
         if (secondSegment) {
             // Handle Projects detail
-            if (view === 'Projects' && !['progress', 'completed', 'cancelled', 'disputes', 'trash'].includes(secondSegment.toLowerCase())) {
+            const projectTabs = [
+                'progress', 'revision', 'revision-urgent', 'urgent', 'approval',
+                'cancelled', 'all', 'done', 'revision-done', 'revision-urgent-done',
+                'urgent-done', 'approved', 'completed', 'disputes', 'trash'
+            ];
+            if (view === 'Projects' && !projectTabs.includes(secondSegment.toLowerCase())) {
                 const decodedProjectId = decodeURIComponent(secondSegment);
                 return { view: 'Projects', projectId: decodedProjectId, userId: null };
             }
@@ -60,16 +80,29 @@ export const getInitialView = (): { view: DashboardView; projectId: string | nul
 export const getInitialTab = (view: string, defaultTab: string): string => {
     const segments = window.location.pathname.substring(1).split('/');
     const firstSegment = segments[0]?.toLowerCase();
-    const normalizedView = VIEW_MAP[view] || (view as DashboardView);
+    const normalizedView = (VIEW_MAP[view.toLowerCase()] || (view as DashboardView)) as DashboardView;
+    const pathKey = PATH_MAP[normalizedView];
+
     const allowedTabs: Record<string, string[]> = {
         'Analytics': ['pipeline', 'secured', 'cancelled'],
-        'Settings': ['profile', 'page-access', 'account-access']
+        'Settings': ['profile', 'page-access', 'account-access'],
+        'Projects': [
+            'progress', 'revision', 'revision-urgent', 'urgent', 'approval',
+            'cancelled', 'all', 'done', 'revision-done', 'revision-urgent-done',
+            'urgent-done', 'approved', 'disputes', 'trash'
+        ],
+        'Users': ['users', 'teams', 'shifts']
     };
 
-    if (firstSegment === VIEW_MAP[view]?.toLowerCase() || firstSegment === view.toLowerCase()) {
+    if (firstSegment === pathKey) {
         const secondSegment = segments[1]?.toLowerCase();
         if (secondSegment && allowedTabs[normalizedView]?.includes(secondSegment)) {
             return secondSegment;
+        }
+
+        // Always favor the defaultTab (e.g. 'all') at the view root (/projects)
+        if (!secondSegment || secondSegment === '') {
+            return defaultTab;
         }
     }
 
@@ -99,9 +132,21 @@ export const updateRoute = (view: DashboardView, tab?: string, projectId?: strin
 
     localStorage.setItem('lastDashboardView', view);
 
+    // When navigating to a view root (no tab, no project, no user),
+    // clear any stored tab so it doesn't override the default on next mount.
+    if (!tab && !projectId && !userId) {
+        localStorage.removeItem(`lastTab_${view}`);
+    }
+
     const allowedTabs: Record<string, string[]> = {
         'Analytics': ['pipeline', 'secured', 'cancelled'],
-        'Settings': ['profile', 'page-access', 'account-access']
+        'Settings': ['profile', 'page-access', 'account-access'],
+        'Projects': [
+            'progress', 'revision', 'revision-urgent', 'urgent', 'approval',
+            'cancelled', 'all', 'done', 'revision-done', 'revision-urgent-done',
+            'urgent-done', 'approved'
+        ],
+        'Users': ['users', 'teams', 'shifts']
     };
 
     if (tab && !projectId && !userId) {
