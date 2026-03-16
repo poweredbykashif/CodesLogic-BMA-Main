@@ -53,11 +53,11 @@ const getSteps = (role: string | null, paymentMethod: string | null) => {
 const CompleteProfile: React.FC<CompleteProfileProps> = ({ role, initialStatus, onComplete, onBack }) => {
     const [loading, setLoading] = useState(false);
     const [currentStep, setCurrentStep] = useState(0);
-    const { refreshProfile } = useUser();
+    const { profile, refreshProfile } = useUser();
 
     // Form Data State
     const [profilePic, setProfilePic] = useState<string | null>(localStorage.getItem('nova_draft_profilePic'));
-    const [phone, setPhone] = useState(localStorage.getItem('nova_draft_phone') || '');
+    const [phone, setPhone] = useState(localStorage.getItem('nova_draft_phone') || profile?.whatsapp_number || '');
     const [paymentMethod, setPaymentMethod] = useState<string | null>(localStorage.getItem('nova_draft_paymentMethod'));
     const [bankName, setBankName] = useState(localStorage.getItem('nova_draft_bankName') || '');
     const [accountTitle, setAccountTitle] = useState(localStorage.getItem('nova_draft_accountTitle') || '');
@@ -349,6 +349,9 @@ const CompleteProfile: React.FC<CompleteProfileProps> = ({ role, initialStatus, 
                             variant="metallic"
                             required
                         />
+                        <p className="mt-4 text-[11px] font-bold text-brand-primary uppercase tracking-[0.1em] text-center bg-brand-primary/5 py-2 rounded-lg border border-brand-primary/10">
+                            Ensure this phone number is active on WhatsApp. If not, please change it.
+                        </p>
                     </div>
                 );
             case 'payment-method':

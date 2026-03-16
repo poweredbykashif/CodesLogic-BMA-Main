@@ -5,7 +5,7 @@ import Button from '../components/Button';
 import { Input } from '../components/Input';
 import { supabase } from '../lib/supabase';
 import { addToast } from '../components/Toast';
-import { IconClock, IconZap, IconTrendingUp, IconCalendar, IconTicket } from '../components/Icons';
+import { IconClock, IconZap, IconTrendingUp, IconCalendar, IconTicket, IconPlay } from '../components/Icons';
 import { ElevatedMetallicCard } from '../components/Surfaces';
 import { formatDeadlineDate } from '../utils/formatter';
 import { DatePicker } from '../components/DatePicker';
@@ -148,64 +148,131 @@ const Dashboard: React.FC = () => {
             setSubmittingTicket(false);
         }
     };
+const VideoPreview: React.FC = () => {
+    const [isPlaying, setIsPlaying] = useState(false);
+    const videoId = "M7lc1UVf-VE";
+    const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+
+    return (
+        <ElevatedMetallicCard
+            title={
+                <div className="flex items-center gap-2">
+                    <IconPlay className="w-4 h-4 text-brand-primary" />
+                    <span className="text-sm font-bold text-brand-primary uppercase tracking-wider">Training & Onboarding</span>
+                </div>
+            }
+            className="h-full group"
+            bodyClassName="p-0 overflow-hidden"
+        >
+            <div className="aspect-video relative bg-black/40">
+                {!isPlaying ? (
+                    <div 
+                        className="absolute inset-0 cursor-pointer overflow-hidden"
+                        onClick={() => setIsPlaying(true)}
+                    >
+                        <img 
+                            src={thumbnailUrl} 
+                            alt="Training Thumbnail" 
+                            className="w-full h-full object-cover opacity-60 group-hover:scale-105 transition-transform duration-700"
+                        />
+                        {/* Shimmer Overlay */}
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
+                        
+                        {/* Play Button */}
+                        <div className="absolute inset-0 flex items-center justify-center">
+                            <div className="w-16 h-16 rounded-full bg-brand-primary flex items-center justify-center shadow-[0_0_30px_rgba(255,77,45,0.4)] group-hover:scale-110 transition-transform duration-300">
+                                <IconPlay className="w-8 h-8 text-white fill-white ml-1" />
+                            </div>
+                        </div>
+
+                        <div className="absolute bottom-6 left-6 right-6">
+                            <p className="text-sm font-bold text-white uppercase tracking-wider mb-1">Watch Training Guide</p>
+                            <p className="text-[10px] text-gray-400 font-medium uppercase tracking-widest">Learn how to use the dashboard effectively</p>
+                        </div>
+                    </div>
+                ) : (
+                    <iframe
+                        className="w-full h-full"
+                        src={`https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1`}
+                        title="Training Video"
+                        frameBorder="0"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        allowFullScreen
+                    />
+                )}
+            </div>
+        </ElevatedMetallicCard>
+    );
+};
 
     return (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 fill-mode-both">
             {effectiveRole?.toLowerCase() === 'freelancer' && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <ElevatedMetallicCard
-                        title={
-                            <div className="flex items-center gap-2">
-                                <IconTicket className="w-4 h-4 text-brand-primary" />
-                                <span className="text-sm font-bold text-brand-primary uppercase tracking-wider">Daily Project Capacity</span>
-                            </div>
-                        }
-                        className="h-full"
-                        bodyClassName="p-6"
-                    >
-                        <div className="space-y-6">
-                            <div className="flex items-center justify-between">
-                                <div className="space-y-1">
-                                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Active Limit</p>
-                                    <p className="text-2xl font-black text-white">
-                                        {profile?.daily_capacity || 0} <span className="text-sm font-medium text-gray-500">projects / day</span>
-                                    </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <div className="lg:col-span-1">
+                        <ElevatedMetallicCard
+                            title={
+                                <div className="flex items-center gap-2">
+                                    <IconTicket className="w-4 h-4 text-brand-primary" />
+                                    <span className="text-sm font-bold text-brand-primary uppercase tracking-wider">Daily Project Capacity</span>
                                 </div>
-                                <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center text-brand-primary">
-                                    <IconTrendingUp className="w-6 h-6" />
+                            }
+                            className="h-full"
+                            bodyClassName="p-6"
+                        >
+                            <div className="space-y-6">
+                                <div className="flex items-center justify-between">
+                                    <div className="space-y-1">
+                                        <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Active Limit</p>
+                                        <p className="text-2xl font-black text-white">
+                                            {profile?.daily_capacity || 0} <span className="text-sm font-medium text-gray-500">projects / day</span>
+                                        </p>
+                                    </div>
+                                    <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center text-brand-primary">
+                                        <IconTrendingUp className="w-6 h-6" />
+                                    </div>
                                 </div>
-                            </div>
 
-                            <div className="flex items-center gap-4 py-4 border-y border-white/5">
-                                <div className="p-2 rounded-lg bg-white/5 text-gray-400">
-                                    <IconCalendar size={16} />
+                                <div className="flex items-center gap-4 py-4 border-y border-white/5">
+                                    <div className="p-2 rounded-lg bg-white/5 text-gray-400">
+                                        <IconCalendar size={16} />
+                                    </div>
+                                    <div>
+                                        <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Allocation Start</p>
+                                        <p className="text-sm font-bold text-white">
+                                            {initialTicket?.start_datetime ? formatDeadlineDate(initialTicket.start_datetime) : 'N/A'}
+                                        </p>
+                                    </div>
                                 </div>
-                                <div>
-                                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Allocation Start</p>
-                                    <p className="text-sm font-bold text-white">
-                                        {initialTicket?.start_datetime ? formatDeadlineDate(initialTicket.start_datetime) : 'N/A'}
-                                    </p>
-                                </div>
-                            </div>
 
-                            <Button
-                                variant="metallic"
-                                size="sm"
-                                className="w-full"
-                                onClick={() => setIsIncreaseModalOpen(true)}
-                            >
-                                Increase Limit
-                            </Button>
-                        </div>
-                    </ElevatedMetallicCard>
+                                <Button
+                                    variant="metallic"
+                                    size="sm"
+                                    className="w-full"
+                                    onClick={() => setIsIncreaseModalOpen(true)}
+                                >
+                                    Increase Limit
+                                </Button>
+                            </div>
+                        </ElevatedMetallicCard>
+                    </div>
+
+                    <div className="lg:col-span-2">
+                        <VideoPreview />
+                    </div>
                 </div>
             )}
 
             {/* Dashboard Content will be implemented here */}
             {effectiveRole?.toLowerCase() !== 'freelancer' && (
-                <div className="flex flex-col items-center justify-center min-h-[400px] text-center">
-                    <h2 className="text-xl font-bold text-white mb-2">Dashboard Coming Soon</h2>
-                    <p className="text-gray-500 max-w-sm">We are currently restructuring the overview to provide more relevant workspace insights.</p>
+                <div className="space-y-8">
+                    <div className="max-w-3xl mx-auto">
+                        <VideoPreview />
+                    </div>
+                    <div className="flex flex-col items-center justify-center min-h-[300px] text-center">
+                        <h2 className="text-xl font-bold text-white mb-2">Workspace Overview</h2>
+                        <p className="text-gray-500 max-w-sm">We are currently restructuring the internal analytics modules. Stay tuned for deeper business insights.</p>
+                    </div>
                 </div>
             )}
 

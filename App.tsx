@@ -36,7 +36,7 @@ import GuideTriggerDispute from './sections/GuideTriggerDispute';
 import GuideTriggerArtHelp from './sections/GuideTriggerArtHelp';
 import GuidePostComments from './sections/GuidePostComments';
 import GuideSendFiles from './sections/GuideSendFiles';
-import PlatformOverview from './sections/PlatformOverview';
+// Removed PlatformOverview import
 
 import { DashboardLayout, DashboardView } from './layouts/DashboardLayout';
 import { SignInScreen } from './sections/AuthScreens';
@@ -163,7 +163,7 @@ const App: React.FC = () => {
           }
         } else {
           const { view: initialView } = getInitialView();
-          if (initialView === 'Guide' || initialView === 'PlatformOverview') {
+          if (initialView === 'Guide') {
             setView('dashboard');
           } else if (initialView?.startsWith('Guide')) {
             updateRoute('Guide');
@@ -213,7 +213,7 @@ const App: React.FC = () => {
           });
       } else {
         const { view: currentView } = getInitialView();
-        if (currentView === 'Guide' || currentView === 'PlatformOverview') {
+        if (currentView === 'Guide') {
           setView('dashboard');
           setDashboardView(currentView);
         } else if (currentView?.startsWith('Guide')) {
@@ -520,7 +520,7 @@ const App: React.FC = () => {
         case 'GuideTriggerArtHelp': return <GuideTriggerArtHelp />;
         case 'GuidePostComments': return <GuidePostComments />;
         case 'GuideSendFiles': return <GuideSendFiles />;
-        case 'PlatformOverview': return <PlatformOverview />;
+// Removed PlatformOverview case
 
         default: return <Dashboard />;
       }
@@ -539,7 +539,7 @@ const App: React.FC = () => {
               <div className="w-12 h-12 border-2 border-brand-primary/20 border-t-brand-primary rounded-full animate-spin" />
             </div>
           ) : view === 'dashboard' ? (
-            dashboardView.startsWith('Guide') || dashboardView === 'PlatformOverview' ? (
+            dashboardView.startsWith('Guide') ? (
               renderDashboardContent()
             ) : (session) ? (
               <DashboardLayout

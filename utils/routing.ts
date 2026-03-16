@@ -31,8 +31,7 @@ const VIEW_MAP: Record<string, DashboardView> = {
     'guide-trigger-dispute': 'GuideTriggerDispute',
     'guide-trigger-art-help': 'GuideTriggerArtHelp',
     'guide-post-comments': 'GuidePostComments',
-    'guide-send-files': 'GuideSendFiles',
-    'platformoverviewfordesigners': 'PlatformOverview'
+    'guide-send-files': 'GuideSendFiles'
 };
 
 export const PATH_MAP: Record<DashboardView, string> = Object.entries(VIEW_MAP).reduce((acc, [path, view]) => {

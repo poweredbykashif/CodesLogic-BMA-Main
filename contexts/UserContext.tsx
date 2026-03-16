@@ -22,6 +22,7 @@ interface UserProfile {
     payment_email?: string;
     preferred_payment_method?: string;
     daily_capacity?: number | null;
+    whatsapp_number?: string;
 }
 
 interface UserContextType {
