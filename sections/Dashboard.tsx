@@ -258,7 +258,7 @@ const VideoPreview: React.FC = () => {
                     </div>
 
                     <div className="lg:col-span-2">
-                        <VideoPreview />
+                        {effectiveRole?.toLowerCase() === 'super admin' && <VideoPreview />}
                     </div>
                 </div>
             )}
@@ -266,9 +266,11 @@ const VideoPreview: React.FC = () => {
             {/* Dashboard Content will be implemented here */}
             {effectiveRole?.toLowerCase() !== 'freelancer' && (
                 <div className="space-y-8">
-                    <div className="max-w-3xl mx-auto">
-                        <VideoPreview />
-                    </div>
+                    {effectiveRole?.toLowerCase() === 'super admin' && (
+                        <div className="max-w-3xl mx-auto">
+                            <VideoPreview />
+                        </div>
+                    )}
                     <div className="flex flex-col items-center justify-center min-h-[300px] text-center">
                         <h2 className="text-xl font-bold text-white mb-2">Workspace Overview</h2>
                         <p className="text-gray-500 max-w-sm">We are currently restructuring the internal analytics modules. Stay tuned for deeper business insights.</p>
